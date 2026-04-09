@@ -5,24 +5,32 @@ import subprocess, re, json, os
 app = FastAPI()
 DB="users.json"
 
+
 def load():
     if not os.path.exists(DB):
         return {}
     return json.load(open(DB))
 
+
 def save(db):
     json.dump(db,open(DB,"w"))
 
+
 def parse_online(hs):
+
     if "second" in hs:
         return True
+
     if "minute" in hs:
         n=int(hs.split()[0])
         if n < 2:
             return True
+
     return False
 
+
 def peers():
+
     out=subprocess.check_output(
         "docker exec amnezia-awg wg show",
         shell=True
@@ -32,6 +40,7 @@ def peers():
     data=[]
 
     for p in peers:
+
         ip=re.search("allowed ips: (.*)",p)
         hs=re.search("latest handshake: (.*)",p)
         tr=re.search("transfer: (.*)",p)
@@ -40,16 +49,47 @@ def peers():
         hs=hs.group(1) if hs else "never"
         tr=tr.group(1) if tr else "0"
 
+        online=parse_online(hs)
+
         data.append({
             "ip":ip,
             "hs":hs,
             "tr":tr,
-            "online":parse_online(hs)
+            "online":online
         })
+
     return data
 
+
+def disk():
+    st=os.statvfs("/")
+    total=st.f_blocks*st.f_frsize
+    free=st.f_bfree*st.f_frsize
+    used=total-free
+
+    total=round(total/1024/1024/1024,1)
+    used=round(used/1024/1024/1024,1)
+
+    return f"{used}/{total} GB"
+
+
+def ping():
+    try:
+        out=subprocess.check_output(
+            "ping -c 1 1.1.1.1",
+            shell=True
+        ).decode()
+
+        ms=re.search("time=(.*) ms",out).group(1)
+        return ms
+    except:
+        return "-"
+
+
 def system():
+
     load = open("/proc/loadavg").read().split()[0]
+
     mem = open("/proc/meminfo").read()
 
     total = int(re.search(r"MemTotal:\s+(\d+)",mem).group(1))
@@ -60,25 +100,23 @@ def system():
     total = round(total/1024/1024,1)
     used = round(used/1024/1024,1)
 
-    up = open("/proc/uptime").read().split()[0]
-    up = int(float(up))
-
-    h = up//3600
-    m = (up%3600)//60
-
     return {
         "cpu": load,
         "ram": f"{used}/{total} GB",
-        "uptime": f"{h}h {m}m"
+        "disk": disk(),
+        "ping": ping()
     }
+
 
 @app.get("/api")
 def api():
     return peers()
 
+
 @app.get("/stats")
 def stats():
     return system()
+
 
 @app.get("/save")
 def rename(ip:str,name:str):
@@ -87,6 +125,7 @@ def rename(ip:str,name:str):
     save(db)
     return {"ok":True}
 
+
 @app.get("/",response_class=HTMLResponse)
 def ui():
     return """
@@ -94,47 +133,19 @@ def ui():
 <head>
 
 <style>
+
 body{
-margin:0;
 background:#020617;
 color:white;
 font-family:Inter,Arial;
-display:flex
-}
-
-.sidebar{
-width:220px;
-background:#020617;
-border-right:1px solid #1e293b;
-padding:20px;
-height:100vh
-}
-
-.logo{
-font-size:18px;
-font-weight:bold;
-margin-bottom:30px
-}
-
-.menu{
-color:#94a3b8;
-margin:10px 0;
-cursor:pointer
-}
-
-.menu:hover{
-color:white
-}
-
-.main{
-flex:1;
 padding:20px
 }
 
 .top{
 display:flex;
 gap:15px;
-margin-bottom:20px
+margin-bottom:20px;
+flex-wrap:wrap
 }
 
 .stat{
@@ -142,7 +153,7 @@ background:#020617;
 border:1px solid #1e293b;
 padding:15px;
 border-radius:12px;
-min-width:130px
+min-width:140px
 }
 
 .grid{
@@ -193,15 +204,22 @@ padding:6px;
 border-radius:6px
 }
 
-button{
-width:100%;
-margin-top:6px;
-background:#2563eb;
-border:0;
-padding:7px;
-color:white;
-border-radius:6px
+.rename{
+margin-top:8px;
+display:flex;
+justify-content:flex-end;
 }
+
+.rename button{
+width:auto;
+padding:4px 10px;
+font-size:12px;
+background:#1d4ed8;
+border-radius:6px;
+border:0;
+color:white
+}
+
 </style>
 
 <script>
@@ -212,7 +230,6 @@ r=await fetch("/api")
 data=await r.json()
 
 online=0
-offline=0
 
 data.sort((a,b)=> b.online-a.online)
 
@@ -229,7 +246,6 @@ if(!name.toLowerCase().includes(search) &&
 !p.ip.includes(search)) return
 
 if(p.online) online++
-else offline++
 
 grid.innerHTML+=`
 <div class="card">
@@ -245,8 +261,9 @@ ${p.online?'● Online':'● Offline'}
 <div class="tr">${p.tr}</div>
 
 <input id="i_${p.ip}" placeholder="Имя">
-
-<button onclick="save('${p.ip}')">Save</button>
+[09.04.2026 19:49] Danil: <div class="rename">
+<button onclick="save('${p.ip}')">Rename</button>
+</div>
 
 </div>
 `
@@ -254,23 +271,26 @@ ${p.online?'● Online':'● Offline'}
 })
 
 document.getElementById("online").innerText=online
-document.getElementById("offline").innerText=offline
-document.getElementById("total").innerText=data.length
 }
 
 async function stats(){
+
 r=await fetch("/stats")
 s=await r.json()
 
 cpu.innerText=s.cpu
 ram.innerText=s.ram
-uptime.innerText=s.uptime
+disk.innerText=s.disk
+ping.innerText=s.ping+" ms"
+
 }
 
 function save(ip){
+
 name=document.getElementById("i_"+ip).value
 localStorage[ip]=name
 fetch("/save?ip="+ip+"&name="+name)
+
 }
 
 setInterval(()=>{
@@ -284,28 +304,12 @@ stats()
 
 <body onload="load();stats()">
 
-<div class="sidebar">
-<div class="logo">Amnezia Panel</div>
-<div class="menu">Dashboard</div>
-<div class="menu">Peers</div>
-<div class="menu">Logs</div>
-<div class="menu">Settings</div>
-</div>
-
-<div class="main">
+<h2>Amnezia Panel</h2>
 
 <div class="top">
 
 <div class="stat">
 Online<br><span id="online"></span>
-</div>
-
-<div class="stat">
-Offline<br><span id="offline"></span>
-</div>
-
-<div class="stat">
-Total<br><span id="total"></span>
 </div>
 
 <div class="stat">
@@ -317,7 +321,11 @@ RAM<br><span id="ram"></span>
 </div>
 
 <div class="stat">
-Uptime<br><span id="uptime"></span>
+Disk<br><span id="disk"></span>
+</div>
+
+<div class="stat">
+Ping<br><span id="ping"></span>
 </div>
 
 </div>
@@ -325,8 +333,6 @@ Uptime<br><span id="uptime"></span>
 <input id="search" class="search" placeholder="Search..." onkeyup="load()">
 
 <div id="grid" class="grid"></div>
-
-</div>
 
 </body>
 </html>
