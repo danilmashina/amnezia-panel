@@ -5,16 +5,13 @@ import subprocess, re, json, os
 app = FastAPI()
 DB="users.json"
 
-
 def load():
     if not os.path.exists(DB):
         return {}
     return json.load(open(DB))
 
-
 def save(db):
     json.dump(db,open(DB,"w"))
-
 
 def parse_online(hs):
 
@@ -194,7 +191,25 @@ width:300px;
 margin-bottom:15px
 }
 
-input{
+.rename{
+margin-top:8px;
+display:flex;
+justify-content:flex-end;
+gap:6px;
+}
+
+.rename button{
+padding:4px 10px;
+font-size:12px;
+background:#1d4ed8;
+border-radius:6px;
+border:0;
+color:white;
+cursor:pointer
+}
+
+input.rename-input{
+display:none;
 width:100%;
 margin-top:6px;
 background:#020617;
@@ -202,22 +217,6 @@ border:1px solid #1e293b;
 color:white;
 padding:6px;
 border-radius:6px
-}
-
-.rename{
-margin-top:8px;
-display:flex;
-justify-content:flex-end;
-}
-
-.rename button{
-width:auto;
-padding:4px 10px;
-font-size:12px;
-background:#1d4ed8;
-border-radius:6px;
-border:0;
-color:white
 }
 
 </style>
@@ -233,7 +232,6 @@ online=0
 
 data.sort((a,b)=> b.online-a.online)
 
-grid=document.getElementById("grid")
 grid.innerHTML=""
 
 search=document.getElementById("search").value.toLowerCase()
@@ -260,21 +258,39 @@ ${p.online?'● Online':'● Offline'}
 <div>${p.hs}</div>
 <div class="tr">${p.tr}</div>
 
-<input id="i_${p.ip}" placeholder="Имя">
-[09.04.2026 19:49] Danil: <div class="rename">
-<button onclick="save('${p.ip}')">Rename</button>
+<input class="rename-input" id="i_${p.ip}" placeholder="Имя">
+
+<div class="rename">
+<button onclick="rename('${p.ip}')">Rename</button>
 </div>
 
 </div>
 `
-
 })
 
-document.getElementById("online").innerText=online
+onlineEl.innerText=online
+}
+
+function rename(ip){
+
+input=document.getElementById("i_"+ip)
+
+if(input.style.display=="block"){
+save(ip)
+input.style.display="none"
+}else{
+input.style.display="block"
+input.focus()
+}
+}
+
+function save(ip){
+name=document.getElementById("i_"+ip).value
+localStorage[ip]=name
+fetch("/save?ip="+ip+"&name="+name)
 }
 
 async function stats(){
-
 r=await fetch("/stats")
 s=await r.json()
 
@@ -282,15 +298,6 @@ cpu.innerText=s.cpu
 ram.innerText=s.ram
 disk.innerText=s.disk
 ping.innerText=s.ping+" ms"
-
-}
-
-function save(ip){
-
-name=document.getElementById("i_"+ip).value
-localStorage[ip]=name
-fetch("/save?ip="+ip+"&name="+name)
-
 }
 
 setInterval(()=>{
@@ -309,7 +316,7 @@ stats()
 <div class="top">
 
 <div class="stat">
-Online<br><span id="online"></span>
+Online<br><span id="onlineEl"></span>
 </div>
 
 <div class="stat">
