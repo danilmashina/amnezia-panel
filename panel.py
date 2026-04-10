@@ -207,24 +207,6 @@ def peers():
             "tr": tr
         })
 
-    # Собираем общий трафик со всех пиров
-    total_traffic = 0
-    for p in peers:
-        m = re.search(
-            "transfer: (.*) received, (.*) sent",
-            p
-        )
-        if m:
-            r = m.group(1)
-            s = m.group(2)
-            rb = bytes_from(r)
-            sb = bytes_from(s)
-            total_traffic += rb + sb
-    
-    # Обновляем трафик если есть данные
-    if total_traffic > 0:
-        update_traffic(total_traffic)
-
     return result
 
 # --------- API ---------
