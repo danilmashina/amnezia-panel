@@ -70,26 +70,65 @@ def update_traffic(bytes_amount):
     
     save_traffic_data(data)
 
-# --------- CPU docker ---------
+# --------- CPU всех контейнеров ---------
 
 def cpu():
     try:
+        # Суммируем CPU всех контейнеров
         out = subprocess.check_output(
-            "docker stats amnezia-awg --no-stream --format '{{.CPUPerc}}'",
+            "docker stats --no-stream --format '{{.CPUPerc}}' $(docker ps -q)",
             shell=True
         ).decode().strip()
-        return out
+        
+        total_cpu = 0
+        for line in out.split('\n'):
+            if line and '%' in line:
+                val = float(line.replace('%', '').strip())
+                total_cpu += val
+        
+        return f"{total_cpu:.2f}%"
     except:
         return "-"
 
-# --------- RAM ALL containers ---------
+# --------- RAM всех контейнеров ---------
 
 def ram():
     try:
-        out = subprocess.check_output("free -b", shell=True).decode().splitlines()[1].split()
-        total = int(out[1])
-        used = int(out[2])
-        return f"{human(used)}/{human(total)}"
+        # Суммируем RAM всех контейнеров
+        out = subprocess.check_output(
+            "docker stats --no-stream --format '{{.MemUsage}}' $(docker ps -q)",
+            shell=True
+        ).decode().strip()
+        
+        total_used = 0
+        total_limit = 0
+        
+        for line in out.split('\n'):
+            if line and '/' in line:
+                parts = line.split('/')
+                if len(parts) == 2:
+                    used_str = parts[0].strip()
+                    limit_str = parts[1].strip()
+                    
+                    # Парсим used
+                    m = re.match(r"([\d.]+)([A-Za-z]+)", used_str)
+                    if m:
+                        val = float(m.group(1))
+                        unit = m.group(2)
+                        if unit == "KiB": total_used += val * 1024
+                        elif unit == "MiB": total_used += val * 1024 * 1024
+                        elif unit == "GiB": total_used += val * 1024 * 1024 * 1024
+                    
+                    # Парсим limit
+                    m = re.match(r"([\d.]+)([A-Za-z]+)", limit_str)
+                    if m:
+                        val = float(m.group(1))
+                        unit = m.group(2)
+                        if unit == "KiB": total_limit += val * 1024
+                        elif unit == "MiB": total_limit += val * 1024 * 1024
+                        elif unit == "GiB": total_limit += val * 1024 * 1024 * 1024
+        
+        return f"{human(total_used)}/{human(total_limit)}"
     except:
         return "-"
 
