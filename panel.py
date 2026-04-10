@@ -1,19 +1,32 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import subprocess, re, json, os, time
+import subprocess, re, json, os, time, datetime
 
 app = FastAPI()
 DB="users.json"
+TRAFFIC_DB="traffic.json"
 
 
-def load():
-    if not os.path.exists(DB):
+def load_json(path):
+    if not os.path.exists(path):
         return {}
-    return json.load(open(DB))
+    return json.load(open(path))
 
 
-def save(db):
-    json.dump(db,open(DB,"w"))
+def save_json(path,data):
+    json.dump(data,open(path,"w"))
+
+
+def translate_time(t):
+
+    t=t.replace("seconds","сек")
+    t=t.replace("second","сек")
+    t=t.replace("minutes","мин")
+    t=t.replace("minute","мин")
+    t=t.replace("hours","ч")
+    t=t.replace("hour","ч")
+
+    return t
 
 
 def parse_online(hs):
@@ -27,6 +40,85 @@ def parse_online(hs):
             return True
 
     return False
+
+
+def to_bytes(v):
+
+    n=float(v.split()[0])
+    u=v.split()[1]
+
+    if u=="KiB": return n*1024
+    if u=="MiB": return n*1024*1024
+    if u=="GiB": return n*1024*1024*1024
+
+    return n
+
+
+def human(v):
+
+    for u in ["B","KB","MB","GB","TB"]:
+        if v<1024:
+            return f"{v:.1f} {u}"
+        v/=1024
+
+
+def get_total():
+
+    out=subprocess.check_output(
+        "docker exec amnezia-awg wg show",
+        shell=True
+    ).decode()
+
+    total=0
+
+    for line in out.splitlines():
+
+        if "transfer:" in line:
+
+            m=re.search("transfer: (.*) received, (.*) sent",line)
+            if not m: continue
+
+            r=m.group(1)
+            s=m.group(2)
+
+            total+=to_bytes(r)
+            total+=to_bytes(s)
+
+    return total
+
+
+def traffic_stats():
+
+    now=datetime.datetime.now()
+    today=now.strftime("%Y-%m-%d")
+    month=now.strftime("%Y-%m")
+
+    db=load_json(TRAFFIC_DB)
+
+    total=get_total()
+
+    if "start_total" not in db:
+        db["start_total"]=total
+
+    if "today" not in db or db["today"]!=today:
+        db["today"]=today
+        db["today_start"]=total
+
+    if "month" not in db or db["month"]!=month:
+        db["month"]=month
+        db["month_start"]=total
+
+    save_json(TRAFFIC_DB,db)
+
+    today_bytes=total-db["today_start"]
+    month_bytes=total-db["month_start"]
+    total_bytes=total-db["start_total"]
+
+    return {
+        "today":human(today_bytes),
+        "month":human(month_bytes),
+        "total":human(total_bytes)
+    }
 
 
 def peers():
@@ -47,7 +139,11 @@ def peers():
 
         ip=ip.group(1) if ip else "-"
         hs=hs.group(1) if hs else "никогда"
+        hs=translate_time(hs)
+
         tr=tr.group(1) if tr else "0"
+        tr=tr.replace("received","↓")
+        tr=tr.replace("sent","↑")
 
         online=parse_online(hs)
 
@@ -86,52 +182,6 @@ def ping():
         return "-"
 
 
-def to_bytes(v):
-
-    n=float(v.split()[0])
-    u=v.split()[1]
-
-    if u=="KiB": return n*1024
-    if u=="MiB": return n*1024*1024
-    if u=="GiB": return n*1024*1024*1024
-
-    return n
-
-
-def human(v):
-
-    for u in ["B","KB","MB","GB","TB"]:
-        if v<1024:
-            return f"{v:.1f} {u}"
-        v/=1024
-
-
-def total_traffic():
-
-    out=subprocess.check_output(
-        "docker exec amnezia-awg wg show",
-        shell=True
-    ).decode()
-
-    rx=0
-    tx=0
-
-    for line in out.splitlines():
-
-        if "transfer:" in line:
-
-            m=re.search("transfer: (.*) received, (.*) sent",line)
-            if not m: continue
-
-            r=m.group(1)
-            s=m.group(2)
-
-            rx+=to_bytes(r)
-            tx+=to_bytes(s)
-
-    return human(rx+tx)
-
-
 def system():
 
     load = open("/proc/loadavg").read().split()[0]
@@ -146,12 +196,16 @@ def system():
     total = round(total/1024/1024,1)
     used = round(used/1024/1024,1)
 
+    t=traffic_stats()
+
     return {
         "cpu": load,
         "ram": f"{used}/{total} GB",
         "disk": disk(),
         "ping": ping(),
-        "traffic": total_traffic()
+        "today": t["today"],
+        "month": t["month"],
+        "total": t["total"]
     }
 
 
@@ -165,14 +219,6 @@ def stats():
     return system()
 
 
-@app.get("/save")
-def rename(ip:str,name:str):
-    db=load()
-    db[ip]=name
-    save(db)
-    return {"ok":True}
-
-
 @app.get("/",response_class=HTMLResponse)
 def ui():
     return """
@@ -180,135 +226,32 @@ def ui():
 <head>
 
 <style>
-
-body{
-background:#020617;
-color:white;
-font-family:Inter,Arial;
-padding:20px
-}
-
-.top{
-display:flex;
-gap:15px;
-margin-bottom:20px;
-flex-wrap:wrap
-}
-
-.stat{
-background:#020617;
-border:1px solid #1e293b;
-padding:15px;
-border-radius:12px;
-min-width:150px
-}
-
-.grid{
-display:grid;
-grid-template-columns:repeat(auto-fill,320px);
-gap:15px
-}
-
-.card{
-background:#020617;
-border:1px solid #1e293b;
-padding:15px;
-border-radius:14px;
-transition:.2s
-}
-
-.card:hover{
-border-color:#2563eb
-}
-
-.name{
-font-size:16px;
-font-weight:bold
-}
-
+body{background:#020617;color:white;font-family:Inter;padding:20px}
+.top{display:flex;gap:15px;margin-bottom:20px;flex-wrap:wrap}
+.stat{background:#020617;border:1px solid #1e293b;padding:15px;border-radius:12px;min-width:150px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,320px);gap:15px}
+.card{background:#020617;border:1px solid #1e293b;padding:15px;border-radius:14px}
+.name{font-weight:bold}
 .online{color:#22c55e}
 .offline{color:#6b7280}
-
-.ip{color:#94a3b8;margin-top:4px}
-.tr{color:#38bdf8;margin-top:4px}
-
-.search{
-padding:8px;
-background:#020617;
-border:1px solid #1e293b;
-color:white;
-width:300px;
-margin-bottom:15px
-}
-
-.rename{
-margin-top:8px;
-display:flex;
-justify-content:flex-end;
-}
-
-.rename button{
-padding:4px 10px;
-font-size:12px;
-background:#1d4ed8;
-border-radius:6px;
-border:0;
-color:white;
-cursor:pointer
-}
-
-input.rename-input{
-display:none;
-width:100%;
-margin-top:6px;
-background:#020617;
-border:1px solid #1e293b;
-color:white;
-padding:6px;
-border-radius:6px
-}
-
+.ip{color:#94a3b8}
+.tr{color:#38bdf8}
 </style>
 
 <script>
 
-let editing=false
-
 async function load(){
-
-if(editing) return
 
 r=await fetch("/api")
 data=await r.json()
 
-online=0
-
-data.sort((a,b)=> b.online-a.online)
-
 grid.innerHTML=""
-
-search=document.getElementById("search").value.toLowerCase()
 
 data.forEach(p=>{
 
 name=localStorage[p.ip]||p.ip
 
-if(!name.toLowerCase().includes(search) &&
-!p.ip.includes(search)) return
-
-if(p.online) online++
-
-grid.innerHTML+=card(p,name)
-
-})
-
-onlineEl.innerText=online
-}
-
-
-function card(p,name){
-
-return `
+grid.innerHTML+=`
 <div class="card">
 
 <div class="name">${name}</div>
@@ -319,51 +262,14 @@ ${p.online?'🟢 Онлайн':'⚫ Не активен'}
 
 <div class="ip">${p.ip}</div>
 
-<div>
-Последняя активность: ${p.hs}
-</div>
+<div>Активность: ${p.hs}</div>
 
-<div class="tr">
-Трафик: ${p.tr}
-</div>
-
-<input class="rename-input" id="i_${p.ip}" placeholder="Имя">
-
-<div class="rename">
-<button onclick="rename('${p.ip}')">Переименовать</button>
-</div>
+<div class="tr">Трафик: ${p.tr}</div>
 
 </div>
 `
+})
 }
-
-
-function rename(ip){
-
-input=document.getElementById("i_"+ip)
-
-if(input.style.display=="block"){
-
-save(ip)
-editing=false
-input.style.display="none"
-
-}else{
-
-editing=true
-input.style.display="block"
-input.focus()
-
-}
-}
-
-
-function save(ip){
-name=document.getElementById("i_"+ip).value
-localStorage[ip]=name
-fetch("/save?ip="+ip+"&name="+name)
-}
-
 
 async function stats(){
 
@@ -374,15 +280,13 @@ cpu.innerText=s.cpu
 ram.innerText=s.ram
 disk.innerText=s.disk
 ping.innerText=s.ping+" ms"
-traffic.innerText=s.traffic
+today.innerText=s.today
+month.innerText=s.month
+total.innerText=s.total
 
 }
 
-
-setInterval(()=>{
-load()
-stats()
-},3000)
+setInterval(()=>{load();stats()},3000)
 
 </script>
 
@@ -394,33 +298,16 @@ stats()
 
 <div class="top">
 
-<div class="stat">
-Онлайн<br><span id="onlineEl"></span>
-</div>
+<div class="stat">CPU<br><span id="cpu"></span></div>
+<div class="stat">RAM<br><span id="ram"></span></div>
+<div class="stat">Disk<br><span id="disk"></span></div>
+<div class="stat">Ping<br><span id="ping"></span></div>
 
-<div class="stat">
-CPU<br><span id="cpu"></span>
-</div>
-
-<div class="stat">
-RAM<br><span id="ram"></span>
-</div>
-
-<div class="stat">
-Диск<br><span id="disk"></span>
-</div>
-
-<div class="stat">
-Ping<br><span id="ping"></span>
-</div>
-
-<div class="stat">
-Трафик<br><span id="traffic"></span>
-</div>
+<div class="stat">Сегодня<br><span id="today"></span></div>
+<div class="stat">Месяц<br><span id="month"></span></div>
+<div class="stat">Всего<br><span id="total"></span></div>
 
 </div>
-
-<input id="search" class="search" placeholder="Поиск..." onkeyup="load()">
 
 <div id="grid" class="grid"></div>
 
