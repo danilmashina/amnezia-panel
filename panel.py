@@ -145,7 +145,8 @@ def peers():
             "docker exec amnezia-awg wg show",
             shell=True
         ).decode()
-    except:
+    except Exception as e:
+        print(f"Error running wg show: {e}")
         return []
 
     peers_list = out.split("peer: ")[1:]
@@ -153,13 +154,18 @@ def peers():
     total_traffic = 0
 
     for p in peers_list:
-        ip_match = re.search(r"allowed ips: ([\d.]+)", p)
+        # Ищем allowed ips - может быть с маской типа 10.8.1.4/32
+        ip_match = re.search(r"allowed ips: ([\d.]+(?:/\d+)?)", p)
         hs_match = re.search(r"latest handshake: (.*)", p)
 
         if not ip_match:
             continue
             
         ip = ip_match.group(1).strip()
+        # Убираем маску если есть
+        if "/" in ip:
+            ip = ip.split("/")[0]
+            
         hs = hs_match.group(1) if hs_match else "never"
 
         online = False
@@ -199,6 +205,9 @@ def peers():
         })
 
     if total_traffic > 0:
+        update_traffic(total_traffic)
+
+    return result    if total_traffic > 0:
         update_traffic(total_traffic)
 
     return result
