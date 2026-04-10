@@ -65,25 +65,12 @@ def cpu():
 
 def ram():
     try:
-        out = subprocess.check_output(
-            "docker stats --no-stream --format '{{.MemUsage}}'",
-            shell=True
-        ).decode().splitlines()
+        out = subprocess.check_output("free -b", shell=True).decode().splitlines()[1].split()
 
-        total_used = 0
-        total_limit = 0
+        total = int(out[1])
+        used = int(out[2])
 
-        for line in out:
-
-            if "/" not in line:
-                continue
-
-            used, limit = line.split("/")
-
-            total_used += parse_mem(used)
-            total_limit += parse_mem(limit)
-
-        return f"{human(total_used)}/{human(total_limit)}"
+        return f"{human(used)}/{human(total)}"
 
     except:
         return "-"
