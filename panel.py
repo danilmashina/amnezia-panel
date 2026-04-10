@@ -6,26 +6,15 @@ from datetime import datetime
 app = FastAPI()
 
 TRAFFIC_FILE = "/opt/amnezia/traffic.json"
-LAST_TRAFFIC = {}
 
 # ---------------- helpers ----------------
-
-def parse_mem(v):
-    m = re.match(r"([0-9.]+)([A-Za-z]+)", v.strip())
-    if not m:
-        return 0
-    n = float(m.group(1))
-    u = m.group(2)
-    if u == "KiB": return n * 1024
-    if u == "MiB": return n * 1024 * 1024
-    if u == "GiB": return n * 1024 * 1024 * 1024
-    return n
 
 def human(b):
     for u in ["B","KB","MB","GB","TB"]:
         if b < 1024:
             return f"{b:.1f} {u}"
         b /= 1024
+    return f"{b:.1f} TB"
 
 def bytes_from(v):
     m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", v)
@@ -98,13 +87,16 @@ def ram():
 # --------- DISK ---------
 
 def disk():
-    st = os.statvfs("/")
-    total = st.f_blocks * st.f_frsize
-    free = st.f_bfree * st.f_frsize
-    used = total - free
-    total = round(total/1024/1024/1024,1)
-    used = round(used/1024/1024/1024,1)
-    return f"{used}/{total} GB"
+    try:
+        st = os.statvfs("/")
+        total = st.f_blocks * st.f_frsize
+        free = st.f_bfree * st.f_frsize
+        used = total - free
+        total = round(total/1024/1024/1024,1)
+        used = round(used/1024/1024/1024,1)
+        return f"{used}/{total} GB"
+    except:
+        return "-"
 
 # --------- PING через VPN ---------
 
@@ -115,8 +107,10 @@ def ping_vpn():
             shell=True,
             timeout=5
         ).decode()
-        ms = re.search("time=(.*) ms", o).group(1)
-        return ms
+        ms = re.search(r"time=([\d.]+)", o)
+        if ms:
+            return ms.group(1)
+        return "-"
     except:
         return "-"
 
@@ -124,38 +118,28 @@ def ping_vpn():
 
 def speedtest():
     try:
-        # Пробуем разные пути
-        paths = ["/opt/amnezia/speedtest", "/usr/local/bin/speedtest", "speedtest"]
-        result = None
-        
-        for path in paths:
-            try:
-                result = subprocess.check_output(
-                    f"{path} --simple",
-                    shell=True,
-                    timeout=300
-                ).decode().strip()
-                break
-            except:
-                continue
-        
-        if not result:
-            return {"download": "-", "upload": "-"}
+        result = subprocess.check_output(
+            "speedtest --simple",
+            shell=True,
+            timeout=300
+        ).decode().strip()
         
         lines = result.split('\n')
         if len(lines) >= 2:
-            download = float(lines[0])
-            upload = float(lines[1])
-            return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
+            try:
+                download = float(lines[0])
+                upload = float(lines[1])
+                return {"download": f"{download:.1f}", "upload": f"{upload:.1f}"}
+            except:
+                return {"download": "-", "upload": "-"}
         return {"download": "-", "upload": "-"}
-    except:
+    except Exception as e:
+        print(f"Speedtest error: {e}")
         return {"download": "-", "upload": "-"}
 
 # --------- PEERS ---------
 
 def peers():
-    global LAST_TRAFFIC
-    
     try:
         out = subprocess.check_output(
             "docker exec amnezia-awg wg show",
@@ -166,24 +150,22 @@ def peers():
 
     peers_list = out.split("peer: ")[1:]
     result = []
-    total_new_traffic = 0
+    total_traffic = 0
 
     for p in peers_list:
-        ip = re.search("allowed ips: (.*)", p)
-        hs = re.search("latest handshake: (.*)", p)
+        ip_match = re.search(r"allowed ips: ([\d.]+)", p)
+        hs_match = re.search(r"latest handshake: (.*)", p)
 
-        if not ip:
+        if not ip_match:
             continue
             
-        ip = ip.group(1).strip()
-        hs = hs.group(1) if hs else "never"
+        ip = ip_match.group(1).strip()
+        hs = hs_match.group(1) if hs_match else "never"
 
         online = False
-
         if "second" in hs:
             online = True
-
-        if "minute" in hs:
+        elif "minute" in hs:
             try:
                 n = int(hs.split()[0])
                 if n < 2:
@@ -191,32 +173,23 @@ def peers():
             except:
                 pass
 
-        m = re.search(
-            "transfer: (.*) received, (.*) sent",
-            p
-        )
-
+        tr = "0"
+        rb = 0
+        sb = 0
+        
+        m = re.search(r"transfer: ([\d.]+\s+[A-Za-z]+) received, ([\d.]+\s+[A-Za-z]+) sent", p)
         if m:
             r = m.group(1)
             s = m.group(2)
 
             rb = bytes_from(r)
             sb = bytes_from(s)
-
             total = rb + sb
+            total_traffic += total
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
-        else:
-            tr = "0"
 
-        hs = hs.replace("seconds","сек")
-        hs = hs.replace("second","сек")
-        hs = hs.replace("minutes","мин")
-        hs = hs.replace("minute","мин")
-        hs = hs.replace("hours","ч")
-        hs = hs.replace("hour","ч")
-        hs = hs.replace("ago","назад")
-        hs = hs.replace("never","никогда")
+        hs = hs.replace("seconds","сек").replace("second","сек").replace("minutes","мин").replace("minute","мин").replace("hours","ч").replace("hour","ч").replace("ago","назад").replace("never","никогда")
 
         result.append({
             "ip": ip,
@@ -224,12 +197,9 @@ def peers():
             "online": online,
             "tr": tr
         })
-        
-        total_new_traffic += rb + sb
 
-    # Обновляем трафик со всех пиров
-    if total_new_traffic > 0:
-        update_traffic(total_new_traffic)
+    if total_traffic > 0:
+        update_traffic(total_traffic)
 
     return result
 
@@ -282,7 +252,7 @@ def ui():
             font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
             color: #e2e8f0;
-            padding: 40px 20px;
+            padding: 20px;
             min-height: 100vh;
             position: relative;
             overflow-x: hidden;
@@ -321,13 +291,11 @@ def ui():
             -webkit-text-fill-color: transparent;
             background-clip: text;
             margin-bottom: 5px;
-            letter-spacing: -1px;
         }
 
         .header p {
             color: #94a3b8;
             font-size: 12px;
-            font-weight: 300;
         }
 
         .stats-grid {
@@ -344,25 +312,12 @@ def ui():
             border-radius: 12px;
             padding: 12px;
             transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
         }
 
         .stat-card:hover {
             background: rgba(30, 41, 59, 0.6);
             border-color: rgba(148, 163, 184, 0.4);
-            transform: translateY(-5px);
-            box-shadow: 0 20px 40px rgba(59, 130, 246, 0.1);
+            transform: translateY(-3px);
         }
 
         .stat-icon {
@@ -374,7 +329,6 @@ def ui():
             font-size: 10px;
             color: #94a3b8;
             text-transform: uppercase;
-            letter-spacing: 0.3px;
             font-weight: 600;
             margin-bottom: 4px;
         }
@@ -399,9 +353,8 @@ def ui():
 
         .stat-fill {
             height: 100%;
-            border-radius: 3px;
+            border-radius: 2px;
             transition: width 0.5s ease;
-            background: linear-gradient(90deg, #3b82f6, #06b6d4);
         }
 
         .stat-fill.cpu {
@@ -429,23 +382,17 @@ def ui():
             transition: all 0.3s ease;
             font-size: 10px;
             text-transform: uppercase;
-            letter-spacing: 0.3px;
             font-family: 'Inter', sans-serif;
         }
 
         .action-btn:hover:not(:disabled) {
             background: linear-gradient(135deg, #2563eb, #1d4ed8);
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
         }
 
         .action-btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
-        }
-
-        .action-btn:active:not(:disabled) {
-            transform: translateY(0);
         }
 
         .section-title {
@@ -470,25 +417,12 @@ def ui():
             border-radius: 12px;
             padding: 16px;
             transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .peer-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
         }
 
         .peer-card:hover {
             background: rgba(30, 41, 59, 0.6);
             border-color: rgba(99, 102, 241, 0.5);
-            transform: translateY(-8px);
-            box-shadow: 0 25px 50px rgba(99, 102, 241, 0.15);
+            transform: translateY(-5px);
         }
 
         .peer-name {
@@ -497,7 +431,6 @@ def ui():
             color: #e2e8f0;
             margin-bottom: 10px;
             cursor: pointer;
-            transition: color 0.2s;
             word-break: break-all;
         }
 
@@ -562,11 +495,6 @@ def ui():
             margin-bottom: 8px;
             display: flex;
             justify-content: space-between;
-            align-items: center;
-        }
-
-        .peer-info-label {
-            color: #94a3b8;
         }
 
         .peer-traffic {
@@ -580,55 +508,9 @@ def ui():
             border-left: 3px solid #06b6d4;
         }
 
-        .peer-rename {
-            display: none;
-            margin-top: 12px;
-            gap: 8px;
-        }
-
-        .peer-rename.active {
-            display: flex;
-        }
-
-        .peer-rename input {
-            flex: 1;
-            padding: 8px 12px;
-            background: rgba(15, 23, 42, 0.7);
-            border: 1px solid rgba(99, 102, 241, 0.5);
-            border-radius: 8px;
-            color: #e2e8f0;
-            font-size: 13px;
-            transition: border-color 0.2s;
-            font-family: 'Inter', sans-serif;
-        }
-
-        .peer-rename input:focus {
-            outline: none;
-            border-color: rgba(99, 102, 241, 1);
-            background: rgba(15, 23, 42, 0.9);
-        }
-
-        .peer-rename button {
-            padding: 8px 16px;
-            background: linear-gradient(135deg, #6366f1, #4f46e5);
-            border: none;
-            border-radius: 8px;
-            color: white;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 12px;
-            font-family: 'Inter', sans-serif;
-        }
-
-        .peer-rename button:hover {
-            background: linear-gradient(135deg, #4f46e5, #4338ca);
-            transform: translateY(-2px);
-        }
-
         .empty-state {
             text-align: center;
-            padding: 60px 20px;
+            padding: 40px 20px;
             color: #94a3b8;
         }
 
@@ -643,34 +525,7 @@ def ui():
         .traffic-row {
             display: flex;
             justify-content: space-between;
-            margin: 3px 0;
-        }
-
-        @media (max-width: 768px) {
-            .header h1 {
-                font-size: 36px;
-            }
-
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 12px;
-            }
-
-            .stat-card {
-                padding: 12px;
-            }
-
-            .stat-value {
-                font-size: 14px;
-            }
-
-            .peers-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .peer-card {
-                padding: 16px;
-            }
+            margin: 2px 0;
         }
 
     </style>
@@ -696,7 +551,7 @@ def ui():
             <div class="stat-card">
                 <div class="stat-icon">RAM</div>
                 <div class="stat-label">RAM</div>
-                <div class="stat-value" id="ram" style="font-size: 16px;">-</div>
+                <div class="stat-value" id="ram" style="font-size: 12px;">-</div>
                 <div class="stat-bar">
                     <div class="stat-fill ram" id="ram-bar" style="width: 0%"></div>
                 </div>
@@ -705,7 +560,7 @@ def ui():
             <div class="stat-card">
                 <div class="stat-icon">DISK</div>
                 <div class="stat-label">Disk</div>
-                <div class="stat-value" id="disk" style="font-size: 16px;">-</div>
+                <div class="stat-value" id="disk" style="font-size: 12px;">-</div>
                 <div class="stat-bar">
                     <div class="stat-fill disk" id="disk-bar" style="width: 0%"></div>
                 </div>
@@ -721,7 +576,7 @@ def ui():
             <div class="stat-card">
                 <div class="stat-icon">SPEED</div>
                 <div class="stat-label">Speedtest</div>
-                <div class="stat-value" id="speed" style="font-size: 12px;">-</div>
+                <div class="stat-value" id="speed" style="font-size: 11px;">-</div>
                 <button class="action-btn" id="speed-btn" onclick="doSpeedtest()">Start</button>
             </div>
 
@@ -759,7 +614,7 @@ def ui():
                 const grid = document.getElementById('grid');
                 grid.innerHTML = "";
 
-                if (data.length === 0) {
+                if (!data || data.length === 0) {
                     grid.innerHTML = '<div class="empty-state"><p>No active peers</p></div>';
                     return;
                 }
@@ -780,16 +635,11 @@ def ui():
                         <div class="peer-ip">${p.ip}</div>
 
                         <div class="peer-info">
-                            <span class="peer-info-label">Activity:</span>
+                            <span>Activity:</span>
                             <span>${p.hs}</span>
                         </div>
 
-                        <div class="peer-traffic">Traffic: ${p.tr}</div>
-
-                        <div class="peer-rename" id="r${p.ip}">
-                            <input id="i${p.ip}" placeholder="Enter peer name" value="${name}">
-                            <button onclick="save('${p.ip}')">OK</button>
-                        </div>
+                        <div class="peer-traffic">${p.tr}</div>
                     `;
 
                     grid.appendChild(card);
@@ -801,18 +651,12 @@ def ui():
 
         function rename(ip) {
             editing = ip;
-            const renameEl = document.getElementById("r" + ip);
-            renameEl.classList.add('active');
-            document.getElementById("i" + ip).focus();
-        }
-
-        function save(ip) {
-            const v = document.getElementById("i" + ip).value;
-            if (v.trim()) {
-                localStorage[ip] = v;
+            const input = prompt('Enter peer name:', localStorage[ip] || ip);
+            if (input) {
+                localStorage[ip] = input;
+                load();
             }
             editing = null;
-            load();
         }
 
         async function stats() {
@@ -904,7 +748,7 @@ def ui():
             try {
                 const r = await fetch("/speedtest");
                 const s = await r.json();
-                speedEl.innerHTML = `<div style="font-size: 11px;">D: ${s.download}<br>U: ${s.upload}</div>`;
+                speedEl.innerHTML = `<div style="font-size: 11px;">D: ${s.download} Mbps<br>U: ${s.upload} Mbps</div>`;
             } catch (err) {
                 console.error('Speedtest error:', err);
                 speedEl.innerText = 'Error';
