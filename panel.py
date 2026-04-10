@@ -107,8 +107,9 @@ def disk():
 
 def ping_vpn():
     try:
+        # Пингуем реальный IP сервера, а не localhost
         o = subprocess.check_output(
-            "ping -c 1 138.124.99.81",
+            "ping -c 1 8.8.8.8",
             shell=True,
             timeout=5
         ).decode()
