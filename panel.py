@@ -32,10 +32,11 @@ def bytes_from(v):
     if not m:
         return 0
     n = float(m.group(1))
-    u = m.group(2)
+    u = m.group(2).strip()
     if u == "KiB": return n * 1024
     if u == "MiB": return n * 1024 * 1024
     if u == "GiB": return n * 1024 * 1024 * 1024
+    if u == "B": return n
     return n
 
 # --------- Traffic File Management ---------
@@ -123,11 +124,23 @@ def ping_vpn():
 
 def speedtest():
     try:
-        result = subprocess.check_output(
-            "/opt/amnezia/speedtest --simple",
-            shell=True,
-            timeout=300
-        ).decode().strip()
+        # Пробуем разные пути
+        paths = ["/opt/amnezia/speedtest", "/usr/local/bin/speedtest", "speedtest"]
+        result = None
+        
+        for path in paths:
+            try:
+                result = subprocess.check_output(
+                    f"{path} --simple",
+                    shell=True,
+                    timeout=300
+                ).decode().strip()
+                break
+            except:
+                continue
+        
+        if not result:
+            return {"download": "-", "upload": "-"}
         
         lines = result.split('\n')
         if len(lines) >= 2:
@@ -290,40 +303,40 @@ def ui():
         }
 
         .header {
-            margin-bottom: 50px;
+            margin-bottom: 30px;
             text-align: center;
         }
 
         .header h1 {
-            font-size: 48px;
+            font-size: 32px;
             font-weight: 700;
             background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            margin-bottom: 10px;
+            margin-bottom: 5px;
             letter-spacing: -1px;
         }
 
         .header p {
             color: #94a3b8;
-            font-size: 16px;
+            font-size: 12px;
             font-weight: 300;
         }
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 16px;
-            margin-bottom: 50px;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 40px;
         }
 
         .stat-card {
             background: rgba(30, 41, 59, 0.4);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 16px;
-            padding: 16px;
+            border-radius: 12px;
+            padding: 12px;
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
@@ -347,35 +360,35 @@ def ui():
         }
 
         .stat-icon {
-            font-size: 24px;
-            margin-bottom: 8px;
+            font-size: 18px;
+            margin-bottom: 4px;
         }
 
         .stat-label {
-            font-size: 11px;
+            font-size: 10px;
             color: #94a3b8;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.3px;
             font-weight: 600;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
         }
 
         .stat-value {
-            font-size: 18px;
+            font-size: 14px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             font-family: 'Courier New', monospace;
             word-break: break-word;
         }
 
         .stat-bar {
             width: 100%;
-            height: 6px;
+            height: 4px;
             background: rgba(71, 85, 105, 0.3);
-            border-radius: 3px;
+            border-radius: 2px;
             overflow: hidden;
-            margin-top: 12px;
+            margin-top: 6px;
         }
 
         .stat-fill {
@@ -399,18 +412,18 @@ def ui():
 
         .action-btn {
             width: 100%;
-            margin-top: 8px;
-            padding: 8px 12px;
+            margin-top: 6px;
+            padding: 6px 10px;
             background: linear-gradient(135deg, #3b82f6, #2563eb);
             border: none;
-            border-radius: 8px;
+            border-radius: 6px;
             color: white;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 11px;
+            font-size: 10px;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.3px;
             font-family: 'Inter', sans-serif;
         }
 
@@ -430,26 +443,26 @@ def ui():
         }
 
         .section-title {
-            font-size: 24px;
+            font-size: 18px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 30px;
-            padding-bottom: 12px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
             border-bottom: 2px solid rgba(99, 102, 241, 0.3);
         }
 
         .peers-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-            gap: 24px;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
         }
 
         .peer-card {
             background: rgba(30, 41, 59, 0.4);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 16px;
-            padding: 24px;
+            border-radius: 12px;
+            padding: 16px;
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
@@ -473,10 +486,10 @@ def ui():
         }
 
         .peer-name {
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             cursor: pointer;
             transition: color 0.2s;
             word-break: break-all;
@@ -490,9 +503,9 @@ def ui():
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-bottom: 16px;
+            margin-bottom: 12px;
             font-weight: 600;
-            font-size: 14px;
+            font-size: 12px;
         }
 
         .status-dot {
@@ -527,18 +540,18 @@ def ui():
 
         .peer-ip {
             font-family: 'Courier New', monospace;
-            font-size: 13px;
+            font-size: 11px;
             color: #cbd5e1;
             background: rgba(15, 23, 42, 0.5);
-            padding: 8px 12px;
-            border-radius: 8px;
-            margin-bottom: 12px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
             word-break: break-all;
             border: 1px solid rgba(71, 85, 105, 0.3);
         }
 
         .peer-info {
-            font-size: 13px;
+            font-size: 11px;
             color: #cbd5e1;
             margin-bottom: 8px;
             display: flex;
@@ -551,13 +564,13 @@ def ui():
         }
 
         .peer-traffic {
-            font-size: 13px;
+            font-size: 11px;
             color: #06b6d4;
             font-weight: 600;
-            margin-bottom: 12px;
-            padding: 8px 12px;
+            margin-bottom: 10px;
+            padding: 6px 10px;
             background: rgba(6, 182, 212, 0.1);
-            border-radius: 8px;
+            border-radius: 6px;
             border-left: 3px solid #06b6d4;
         }
 
@@ -614,10 +627,10 @@ def ui():
         }
 
         .traffic-info {
-            font-size: 10px;
+            font-size: 9px;
             color: #94a3b8;
-            margin-top: 4px;
-            padding: 4px 0;
+            margin-top: 3px;
+            padding: 3px 0;
             border-top: 1px solid rgba(148, 163, 184, 0.1);
         }
 
