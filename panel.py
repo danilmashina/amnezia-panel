@@ -207,201 +207,597 @@ def p():
 @app.get("/", response_class=HTMLResponse)
 def ui():
     return """
-<html>
-
+<!DOCTYPE html>
+<html lang="ru">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amnezia Panel</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-<style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+            color: #e2e8f0;
+            padding: 40px 20px;
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
+        }
 
-body{
-background:#020617;
-color:white;
-font-family:Inter;
-padding:20px
-}
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 80%, rgba(139, 92, 246, 0.1) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
 
-.top{
-display:flex;
-gap:15px;
-margin-bottom:20px;
-flex-wrap:wrap
-}
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
 
-.stat{
-background:#020617;
-border:1px solid #1e293b;
-padding:14px;
-border-radius:12px;
-min-width:150px
-}
+        .header {
+            margin-bottom: 50px;
+            text-align: center;
+        }
 
-.grid{
-display:grid;
-grid-template-columns:repeat(auto-fill,320px);
-gap:15px
-}
+        .header h1 {
+            font-size: 48px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+            letter-spacing: -1px;
+        }
 
-.card{
-background:#020617;
-border:1px solid #1e293b;
-padding:15px;
-border-radius:14px;
-transition:0.2s
-}
+        .header p {
+            color: #94a3b8;
+            font-size: 16px;
+            font-weight: 300;
+        }
 
-.card:hover{
-border-color:#3b82f6;
-box-shadow:0 0 20px rgba(59,130,246,.2)
-}
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 50px;
+        }
 
-.name{
-font-weight:bold;
-cursor:pointer;
-font-size:16px
-}
+        .stat-card {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
 
-.online{color:#22c55e}
-.offline{color:#64748b}
-.tr{color:#38bdf8}
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+        }
 
-.rename{
-display:none;
-margin-top:8px
-}
+        .stat-card:hover {
+            background: rgba(30, 41, 59, 0.6);
+            border-color: rgba(148, 163, 184, 0.4);
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(59, 130, 246, 0.1);
+        }
 
-button{
-background:#2563eb;
-border:none;
-padding:6px 12px;
-border-radius:6px;
-color:white;
-cursor:pointer
-}
+        .stat-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+        }
 
-</style>
+        .stat-label {
+            font-size: 13px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
 
-<script>
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin-bottom: 12px;
+            font-family: 'Courier New', monospace;
+        }
 
-let editing=null
+        .stat-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(71, 85, 105, 0.3);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
 
-async function load(){
+        .stat-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+            background: linear-gradient(90deg, #3b82f6, #06b6d4);
+        }
 
-if(editing) return
+        .stat-fill.cpu {
+            background: linear-gradient(90deg, #f97316, #ff6b35);
+        }
 
-r=await fetch("/api")
-data=await r.json()
+        .stat-fill.ram {
+            background: linear-gradient(90deg, #8b5cf6, #a78bfa);
+        }
 
-grid.innerHTML=""
+        .stat-fill.disk {
+            background: linear-gradient(90deg, #10b981, #34d399);
+        }
 
-data.forEach(p=>{
+        .ping-btn {
+            width: 100%;
+            margin-top: 12px;
+            padding: 10px 16px;
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
 
-name=localStorage[p.ip]||p.ip
+        .ping-btn:hover {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
+        }
 
-grid.innerHTML+=`
+        .ping-btn:active {
+            transform: translateY(0);
+        }
 
-<div class="card">
+        .section-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin-bottom: 30px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid rgba(99, 102, 241, 0.3);
+        }
 
-<div class="name" onclick="rename('${p.ip}')">
-${name}
-</div>
+        .peers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 24px;
+        }
 
-<div class="${p.online?'online':'offline'}">
-${p.online?'● Онлайн':'● Не активен'}
-</div>
+        .peer-card {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
 
-<div>${p.ip}</div>
+        .peer-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+        }
 
-<div>Активность: ${p.hs}</div>
+        .peer-card:hover {
+            background: rgba(30, 41, 59, 0.6);
+            border-color: rgba(99, 102, 241, 0.5);
+            transform: translateY(-8px);
+            box-shadow: 0 25px 50px rgba(99, 102, 241, 0.15);
+        }
 
-<div class="tr">Трафик: ${p.tr}</div>
+        .peer-name {
+            font-size: 18px;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: color 0.2s;
+            word-break: break-all;
+        }
 
-<div class="rename" id="r${p.ip}">
-<input id="i${p.ip}">
-<button onclick="save('${p.ip}')">OK</button>
-</div>
+        .peer-name:hover {
+            color: #93c5fd;
+        }
 
-</div>
-`
-})
-}
+        .peer-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-weight: 600;
+            font-size: 14px;
+        }
 
-function rename(ip){
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
 
-editing=ip
+        .status-dot.online {
+            background: #10b981;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+        }
 
-document.getElementById("r"+ip).style.display="block"
+        .status-dot.offline {
+            background: #64748b;
+            animation: none;
+        }
 
-}
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
 
-function save(ip){
+        .peer-status.online {
+            color: #10b981;
+        }
 
-v=document.getElementById("i"+ip).value
+        .peer-status.offline {
+            color: #94a3b8;
+        }
 
-localStorage[ip]=v
+        .peer-ip {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #cbd5e1;
+            background: rgba(15, 23, 42, 0.5);
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            word-break: break-all;
+            border: 1px solid rgba(71, 85, 105, 0.3);
+        }
 
-editing=null
+        .peer-info {
+            font-size: 13px;
+            color: #cbd5e1;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
 
-load()
-}
+        .peer-info-label {
+            color: #94a3b8;
+        }
 
-async function stats(){
+        .peer-traffic {
+            font-size: 13px;
+            color: #06b6d4;
+            font-weight: 600;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            background: rgba(6, 182, 212, 0.1);
+            border-radius: 8px;
+            border-left: 3px solid #06b6d4;
+        }
 
-r=await fetch("/stats")
-s=await r.json()
+        .peer-rename {
+            display: none;
+            margin-top: 12px;
+            gap: 8px;
+        }
 
-cpu.innerText=s.cpu
-ram.innerText=s.ram
-disk.innerText=s.disk
+        .peer-rename.active {
+            display: flex;
+        }
 
-}
+        .peer-rename input {
+            flex: 1;
+            padding: 8px 12px;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(99, 102, 241, 0.5);
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-size: 13px;
+            transition: border-color 0.2s;
+            font-family: 'Inter', sans-serif;
+        }
 
-async function doPing(){
+        .peer-rename input:focus {
+            outline: none;
+            border-color: rgba(99, 102, 241, 1);
+            background: rgba(15, 23, 42, 0.9);
+        }
 
-r=await fetch("/ping")
-p=await r.json()
+        .peer-rename button {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 12px;
+            font-family: 'Inter', sans-serif;
+        }
 
-ping.innerText=p.ping+" ms"
+        .peer-rename button:hover {
+            background: linear-gradient(135deg, #4f46e5, #4338ca);
+            transform: translateY(-2px);
+        }
 
-}
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #94a3b8;
+        }
 
-setInterval(()=>{load();stats()},3000)
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
 
-</script>
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 36px;
+            }
 
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 12px;
+            }
+
+            .stat-card {
+                padding: 16px;
+            }
+
+            .stat-value {
+                font-size: 20px;
+            }
+
+            .peers-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .peer-card {
+                padding: 16px;
+            }
+        }
+
+    </style>
 </head>
 
-<body onload="load();stats()">
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛡️ Amnezia Panel</h1>
+            <p>Мониторинг и управление WireGuard пирами</p>
+        </div>
 
-<h2>Amnezia Panel</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">📊</div>
+                <div class="stat-label">CPU</div>
+                <div class="stat-value" id="cpu">-</div>
+                <div class="stat-bar">
+                    <div class="stat-fill cpu" id="cpu-bar" style="width: 0%"></div>
+                </div>
+            </div>
 
-<div class="top">
+            <div class="stat-card">
+                <div class="stat-icon">💾</div>
+                <div class="stat-label">RAM</div>
+                <div class="stat-value" id="ram" style="font-size: 20px;">-</div>
+                <div class="stat-bar">
+                    <div class="stat-fill ram" id="ram-bar" style="width: 0%"></div>
+                </div>
+            </div>
 
-<div class="stat">
-CPU<br>
-<span id="cpu"></span>
-</div>
+            <div class="stat-card">
+                <div class="stat-icon">🗄️</div>
+                <div class="stat-label">Disk</div>
+                <div class="stat-value" id="disk" style="font-size: 20px;">-</div>
+                <div class="stat-bar">
+                    <div class="stat-fill disk" id="disk-bar" style="width: 0%"></div>
+                </div>
+            </div>
 
-<div class="stat">
-RAM<br>
-<span id="ram"></span>
-</div>
+            <div class="stat-card">
+                <div class="stat-icon">🌐</div>
+                <div class="stat-label">Ping</div>
+                <div class="stat-value" id="ping">-</div>
+                <button class="ping-btn" onclick="doPing()">Проверить</button>
+            </div>
+        </div>
 
-<div class="stat">
-Disk<br>
-<span id="disk"></span>
-</div>
+        <h2 class="section-title">Активные пиры</h2>
+        <div class="peers-grid" id="grid"></div>
+    </div>
 
-<div class="stat">
-Ping<br>
-<span id="ping">-</span>
-<br>
-<button onclick="doPing()">ping</button>
-</div>
+    <script>
+        let editing = null;
 
-</div>
+        async function load() {
+            if (editing) return;
 
-<div id="grid" class="grid"></div>
+            try {
+                const r = await fetch("/api");
+                const data = await r.json();
 
+                const grid = document.getElementById('grid');
+                grid.innerHTML = "";
+
+                if (data.length === 0) {
+                    grid.innerHTML = '<div class="empty-state"><p>📭 Нет активных пиров</p></div>';
+                    return;
+                }
+
+                data.forEach(p => {
+                    const name = localStorage[p.ip] || p.ip;
+
+                    const card = document.createElement('div');
+                    card.className = 'peer-card';
+                    card.innerHTML = `
+                        <div class="peer-name" onclick="rename('${p.ip}')">${name}</div>
+                        
+                        <div class="peer-status ${p.online ? 'online' : 'offline'}">
+                            <div class="status-dot ${p.online ? 'online' : 'offline'}"></div>
+                            ${p.online ? '● Онлайн' : '● Не активен'}
+                        </div>
+
+                        <div class="peer-ip">${p.ip}</div>
+
+                        <div class="peer-info">
+                            <span class="peer-info-label">Активность:</span>
+                            <span>${p.hs}</span>
+                        </div>
+
+                        <div class="peer-traffic">📤 ${p.tr}</div>
+
+                        <div class="peer-rename" id="r${p.ip}">
+                            <input id="i${p.ip}" placeholder="Введите имя пира" value="${name}">
+                            <button onclick="save('${p.ip}')">OK</button>
+                        </div>
+                    `;
+
+                    grid.appendChild(card);
+                });
+            } catch (err) {
+                console.error('Load error:', err);
+            }
+        }
+
+        function rename(ip) {
+            editing = ip;
+            const renameEl = document.getElementById("r" + ip);
+            renameEl.classList.add('active');
+            document.getElementById("i" + ip).focus();
+        }
+
+        function save(ip) {
+            const v = document.getElementById("i" + ip).value;
+            if (v.trim()) {
+                localStorage[ip] = v;
+            }
+            editing = null;
+            load();
+        }
+
+        async function stats() {
+            try {
+                const r = await fetch("/stats");
+                const s = await r.json();
+
+                document.getElementById("cpu").innerText = s.cpu;
+                document.getElementById("ram").innerText = s.ram;
+                document.getElementById("disk").innerText = s.disk;
+
+                // Parse CPU percentage
+                if (s.cpu && s.cpu !== "-") {
+                    const cpuVal = parseFloat(s.cpu);
+                    if (!isNaN(cpuVal)) {
+                        document.getElementById("cpu-bar").style.width = Math.min(cpuVal, 100) + "%";
+                    }
+                }
+
+                // Parse RAM percentage
+                if (s.ram && s.ram !== "-") {
+                    const ramParts = s.ram.split("/");
+                    if (ramParts.length === 2) {
+                        const used = parseFloat(ramParts[0]);
+                        const total = parseFloat(ramParts[1]);
+                        if (!isNaN(used) && !isNaN(total) && total > 0) {
+                            const ramVal = (used / total) * 100;
+                            document.getElementById("ram-bar").style.width = Math.min(ramVal, 100) + "%";
+                        }
+                    }
+                }
+
+                // Parse Disk percentage
+                if (s.disk && s.disk !== "-") {
+                    const diskParts = s.disk.split("/");
+                    if (diskParts.length === 2) {
+                        const used = parseFloat(diskParts[0]);
+                        const total = parseFloat(diskParts[1]);
+                        if (!isNaN(used) && !isNaN(total) && total > 0) {
+                            const diskVal = (used / total) * 100;
+                            document.getElementById("disk-bar").style.width = Math.min(diskVal, 100) + "%";
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('Stats error:', err);
+            }
+        }
+
+        async function doPing() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerText = 'Проверка...';
+
+            try {
+                const r = await fetch("/ping");
+                const p = await r.json();
+                document.getElementById("ping").innerText = (p.ping !== "-" ? p.ping + " ms" : "-");
+            } catch (err) {
+                console.error('Ping error:', err);
+                document.getElementById("ping").innerText = "Ошибка";
+            }
+
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.innerText = 'Проверить';
+            }, 1000);
+        }
+
+        // Initial load
+        load();
+        stats();
+
+        // Auto-refresh every 3 seconds
+        setInterval(() => {
+            load();
+            stats();
+        }, 3000);
+    </script>
 </body>
 </html>
-"""
+    """
