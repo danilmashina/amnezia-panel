@@ -707,7 +707,6 @@ def ui():
     <div class="container">
         <div class="header">
             <h1>🛡️ Amnezia Panel</h1>
-            <p>Мониторинг и управление WireGuard пирами</p>
         </div>
 
         <div class="stats-grid">
@@ -769,7 +768,7 @@ def ui():
             </div>
         </div>
 
-        <h2 class="section-title">Активные пиры</h2>
+        <h2 class="section-title">Пользователи</h2>
         <div class="peers-grid" id="grid"></div>
     </div>
 
