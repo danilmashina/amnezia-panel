@@ -112,8 +112,11 @@ def ping_vpn():
             shell=True,
             timeout=5
         ).decode()
-        ms = re.search("time=(.*) ms", o).group(1)
-        return ms
+        # Ищем time=XX.X ms в выводе
+        ms = re.search(r"time=([\d.]+)\s*ms", o)
+        if ms:
+            return ms.group(1)
+        return "-"
     except:
         return "-"
 
