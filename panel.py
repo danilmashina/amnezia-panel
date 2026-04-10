@@ -113,27 +113,25 @@ def ping_vpn():
             timeout=5
         ).decode()
         ms = re.search("time=(.*) ms", o).group(1)
-        return ms
+        return float(ms)
     except:
-        return "-"
+        return None
 
 # --------- SPEEDTEST ---------
 
 def speedtest():
     try:
-        # Проверяем наличие speedtest-cli
-        result = subprocess.check_output(
-            "speedtest-cli --simple",
+        o = subprocess.check_output(
+            "/opt/amnezia/speedtest --accept-license --accept-gdpr --format=json",
             shell=True,
-            timeout=300
-        ).decode().strip()
-        
-        lines = result.split('\n')
-        if len(lines) >= 2:
-            download = float(lines[0])  # Mbps
-            upload = float(lines[1])    # Mbps
-            return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
-        return {"download": "-", "upload": "-"}
+            timeout=60
+        ).decode()
+
+        result = json.loads(o)
+        download_mbps = round(result["download"]["bandwidth"] * 8 / 1_000_000, 2)
+        upload_mbps = round(result["upload"]["bandwidth"] * 8 / 1_000_000, 2)
+
+        return {"download": f"{download_mbps} Mbps", "upload": f"{upload_mbps} Mbps"}
     except:
         return {"download": "-", "upload": "-"}
 
@@ -147,6 +145,7 @@ def peers():
 
     peers = out.split("peer: ")[1:]
     result = []
+    total_traffic = 0
 
     for p in peers:
         ip = re.search("allowed ips: (.*)", p)
@@ -177,9 +176,10 @@ def peers():
             rb = bytes_from(r)
             sb = bytes_from(s)
 
-            total = rb + sb
+            total_bytes = rb + sb
+            total_traffic += total_bytes
 
-            tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
+            tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total_bytes)}"
         else:
             tr = "0"
 
@@ -199,6 +199,10 @@ def peers():
             "tr": tr
         })
 
+    # Обновляем данные о трафике
+    if total_traffic > 0:
+        update_traffic(total_traffic)
+
     return result
 
 # --------- API ---------
@@ -215,9 +219,10 @@ def stats():
         "disk": disk()
     }
 
-@app.get("/ping")
-def p():
-    return {"ping": ping_vpn()}
+@app.get("/ping_vpn")
+def ping_vpn_endpoint():
+    result = ping_vpn()
+    return {"ping": f"{result:.2f} ms" if result else "-"}
 
 @app.get("/speedtest")
 def speed():
@@ -300,8 +305,8 @@ def ui():
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 12px;
             margin-bottom: 50px;
         }
 
@@ -309,8 +314,8 @@ def ui():
             background: rgba(30, 41, 59, 0.4);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 16px;
-            padding: 24px;
+            border-radius: 12px;
+            padding: 16px;
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
@@ -334,24 +339,24 @@ def ui():
         }
 
         .stat-icon {
-            font-size: 32px;
-            margin-bottom: 12px;
-        }
-
-        .stat-label {
-            font-size: 13px;
-            color: #94a3b8;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 600;
+            font-size: 24px;
             margin-bottom: 8px;
         }
 
+        .stat-label {
+            font-size: 11px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
         .stat-value {
-            font-size: 24px;
+            font-size: 18px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
             font-family: 'Courier New', monospace;
             word-break: break-word;
         }
@@ -386,16 +391,16 @@ def ui():
 
         .action-btn {
             width: 100%;
-            margin-top: 12px;
-            padding: 10px 16px;
+            margin-top: 8px;
+            padding: 8px 12px;
             background: linear-gradient(135deg, #3b82f6, #2563eb);
             border: none;
-            border-radius: 8px;
+            border-radius: 6px;
             color: white;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 12px;
+            font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
             font-family: 'Inter', sans-serif;
@@ -610,17 +615,17 @@ def ui():
         }
 
         .traffic-info {
-            font-size: 11px;
+            font-size: 10px;
             color: #94a3b8;
-            margin-top: 6px;
-            padding: 6px 0;
+            margin-top: 4px;
+            padding: 4px 0;
             border-top: 1px solid rgba(148, 163, 184, 0.1);
         }
 
         .traffic-row {
             display: flex;
             justify-content: space-between;
-            margin: 3px 0;
+            margin: 2px 0;
         }
 
         @media (max-width: 768px) {
@@ -629,16 +634,16 @@ def ui():
             }
 
             .stats-grid {
-                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-                gap: 12px;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 8px;
             }
 
             .stat-card {
-                padding: 16px;
+                padding: 12px;
             }
 
             .stat-value {
-                font-size: 18px;
+                font-size: 14px;
             }
 
             .peers-grid {
@@ -661,61 +666,6 @@ def ui():
         </div>
 
         <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-icon">📊</div>
-                <div class="stat-label">CPU</div>
-                <div class="stat-value" id="cpu">-</div>
-                <div class="stat-bar">
-                    <div class="stat-fill cpu" id="cpu-bar" style="width: 0%"></div>
-                </div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">💾</div>
-                <div class="stat-label">RAM</div>
-                <div class="stat-value" id="ram" style="font-size: 20px;">-</div>
-                <div class="stat-bar">
-                    <div class="stat-fill ram" id="ram-bar" style="width: 0%"></div>
-                </div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">🗄️</div>
-                <div class="stat-label">Disk</div>
-                <div class="stat-value" id="disk" style="font-size: 20px;">-</div>
-                <div class="stat-bar">
-                    <div class="stat-fill disk" id="disk-bar" style="width: 0%"></div>
-                </div>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">🌐</div>
-                <div class="stat-label">Ping (VPN)</div>
-                <div class="stat-value" id="ping">-</div>
-                <button class="action-btn" id="ping-btn" onclick="doPing()">Проверить</button>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">⚡</div>
-                <div class="stat-label">Speedtest</div>
-                <div class="stat-value" id="speed" style="font-size: 16px;">-</div>
-                <button class="action-btn speed" id="speed-btn" onclick="doSpeedtest()">Начать</button>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">📡</div>
-                <div class="stat-label">Трафик</div>
-                <div class="stat-value" id="traffic" style="font-size: 18px;">-</div>
-                <div class="traffic-info">
-                    <div class="traffic-row">
-                        <span>За месяц:</span>
-                        <span id="traffic-monthly">0 GB</span>
-                    </div>
-                    <div class="traffic-row">
-                        <span>Всего:</span>
-                        <span id="traffic-total">0 GB</span>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -851,18 +801,18 @@ def ui():
             }
         }
 
-        async function doPing() {
-            const btn = document.getElementById('ping-btn');
+        async function doPingVpn() {
+            const btn = document.getElementById('ping-vpn-btn');
             btn.disabled = true;
             btn.innerText = 'Проверка...';
 
             try {
-                const r = await fetch("/ping");
+                const r = await fetch("/ping_vpn");
                 const p = await r.json();
-                document.getElementById("ping").innerText = (p.ping !== "-" ? p.ping + " ms" : "-");
+                document.getElementById("ping-vpn").innerText = (p.ping !== "-" ? p.ping : "-");
             } catch (err) {
-                console.error('Ping error:', err);
-                document.getElementById("ping").innerText = "Ошибка";
+                console.error('Ping VPN error:', err);
+                document.getElementById("ping-vpn").innerText = "Ошибка";
             }
 
             setTimeout(() => {
