@@ -161,19 +161,14 @@ def peers():
     total_traffic = 0
 
     for p in peers:
-        # Ищем IP с маской или без
-        ip_match = re.search(r"allowed ips: ([\d.]+(?:/\d+)?)", p)
-        hs_match = re.search(r"latest handshake: (.*)", p)
+        ip = re.search("allowed ips: (.*)", p)
+        hs = re.search("latest handshake: (.*)", p)
 
-        if not ip_match:
+        if not ip:
             continue
-            
-        ip = ip_match.group(1).strip()
-        # Убираем маску если есть
-        if "/" in ip:
-            ip = ip.split("/")[0]
-            
-        hs = hs_match.group(1) if hs_match else "never"
+
+        ip = ip.group(1)
+        hs = hs.group(1) if hs else "never"
 
         online = False
 
@@ -189,7 +184,7 @@ def peers():
                 pass
 
         m = re.search(
-            r"transfer: ([\d.]+\s+[A-Za-z]+) received, ([\d.]+\s+[A-Za-z]+) sent",
+            "transfer: (.*) received, (.*) sent",
             p
         )
 
