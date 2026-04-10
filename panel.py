@@ -188,13 +188,17 @@ def peers():
 
             total = rb + sb
             
-            # Считаем только разницу трафика (delta)
-            key = ip
-            prev = last_peer_totals.get(key, total)
-            diff = total - prev
-            if diff > 0 and diff < 10 * 1024 * 1024 * 1024:
-                update_traffic(diff)
-            last_peer_totals[key] = total
+            # save traffic safely
+            try:
+                key = ip
+                if key not in last_peer_totals:
+                    last_peer_totals[key] = total
+                diff = total - last_peer_totals[key]
+                if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
+                    update_traffic(diff)
+                last_peer_totals[key] = total
+            except:
+                pass
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
         else:
