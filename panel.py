@@ -134,9 +134,12 @@ def speedtest():
         
         lines = result.split('\n')
         if len(lines) >= 2:
-            download = float(lines[0])  # Mbps
-            upload = float(lines[1])    # Mbps
-            return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
+            try:
+                download = float(lines[0])  # Mbps
+                upload = float(lines[1])    # Mbps
+                return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
+            except:
+                pass
         return {"download": "-", "upload": "-"}
     except Exception as e:
         print(f"Speedtest error: {e}")
