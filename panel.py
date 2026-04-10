@@ -207,6 +207,28 @@ def peers():
             "tr": tr
         })
 
+    # Простой сбор трафика - суммируем все что есть
+    try:
+        total = 0
+        for item in result:
+            # Парсим трафик из строки "X.X MB ↓ Y.Y MB ↑ | Σ Z.Z MB"
+            if "Σ" in item["tr"]:
+                sigma_part = item["tr"].split("Σ ")[1].strip()
+                # Извлекаем число и единицу
+                import re as regex
+                match = regex.search(r"([\d.]+)\s*([A-Z]+)", sigma_part)
+                if match:
+                    val = float(match.group(1))
+                    unit = match.group(2)
+                    if unit == "B": total += val
+                    elif unit == "KB": total += val * 1024
+                    elif unit == "MB": total += val * 1024 * 1024
+                    elif unit == "GB": total += val * 1024 * 1024 * 1024
+        if total > 0:
+            update_traffic(total)
+    except:
+        pass
+
     return result
 
 # --------- API ---------
