@@ -6,6 +6,7 @@ from datetime import datetime
 app = FastAPI()
 
 TRAFFIC_FILE = "/opt/amnezia/traffic.json"
+LAST_TRAFFIC = {}
 
 # ---------------- helpers ----------------
 
@@ -28,6 +29,8 @@ def human(b):
 
 def bytes_from(v):
     m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", v)
+    if not m:
+        return 0
     n = float(m.group(1))
     u = m.group(2)
     if u == "KiB": return n * 1024
@@ -59,7 +62,6 @@ def update_traffic(bytes_amount):
     data = get_traffic_data()
     current_month = datetime.now().month
     
-    # Если месяц изменился, сбросить месячный счетчик
     if 'last_month' in data and data['last_month'] != current_month:
         data['monthly'] = 0
     
@@ -103,20 +105,6 @@ def disk():
     used = round(used/1024/1024/1024,1)
     return f"{used}/{total} GB"
 
-# --------- PING интернет ---------
-
-def ping_internet():
-    try:
-        o = subprocess.check_output(
-            "ping -c 1 1.1.1.1",
-            shell=True,
-            timeout=5
-        ).decode()
-        ms = re.search("time=(.*) ms", o).group(1)
-        return ms
-    except:
-        return "-"
-
 # --------- PING через VPN ---------
 
 def ping_vpn():
@@ -135,7 +123,6 @@ def ping_vpn():
 
 def speedtest():
     try:
-        # Используем локальный бинарник ookla speedtest
         result = subprocess.check_output(
             "/opt/amnezia/speedtest --simple",
             shell=True,
@@ -144,8 +131,8 @@ def speedtest():
         
         lines = result.split('\n')
         if len(lines) >= 2:
-            download = float(lines[0])  # Mbps
-            upload = float(lines[1])    # Mbps
+            download = float(lines[0])
+            upload = float(lines[1])
             return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
         return {"download": "-", "upload": "-"}
     except:
@@ -154,20 +141,28 @@ def speedtest():
 # --------- PEERS ---------
 
 def peers():
-    out = subprocess.check_output(
-        "docker exec amnezia-awg wg show",
-        shell=True
-    ).decode()
+    global LAST_TRAFFIC
+    
+    try:
+        out = subprocess.check_output(
+            "docker exec amnezia-awg wg show",
+            shell=True
+        ).decode()
+    except:
+        return []
 
-    peers = out.split("peer: ")[1:]
+    peers_list = out.split("peer: ")[1:]
     result = []
-    total_traffic = 0
+    total_new_traffic = 0
 
-    for p in peers:
+    for p in peers_list:
         ip = re.search("allowed ips: (.*)", p)
         hs = re.search("latest handshake: (.*)", p)
 
-        ip = ip.group(1)
+        if not ip:
+            continue
+            
+        ip = ip.group(1).strip()
         hs = hs.group(1) if hs else "never"
 
         online = False
@@ -176,9 +171,12 @@ def peers():
             online = True
 
         if "minute" in hs:
-            n = int(hs.split()[0])
-            if n < 2:
-                online = True
+            try:
+                n = int(hs.split()[0])
+                if n < 2:
+                    online = True
+            except:
+                pass
 
         m = re.search(
             "transfer: (.*) received, (.*) sent",
@@ -193,7 +191,6 @@ def peers():
             sb = bytes_from(s)
 
             total = rb + sb
-            total_traffic += total
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
         else:
@@ -215,10 +212,6 @@ def peers():
             "tr": tr
         })
 
-    # Обновляем трафик со всех пиров
-    if total_traffic > 0:
-        update_traffic(total_traffic)
-
     return result
 
 # --------- API ---------
@@ -237,7 +230,7 @@ def stats():
 
 @app.get("/ping")
 def p():
-    return {"ping_internet": ping_internet(), "ping_vpn": ping_vpn()}
+    return {"ping_vpn": ping_vpn()}
 
 @app.get("/speedtest")
 def speed():
@@ -320,7 +313,7 @@ def ui():
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 16px;
             margin-bottom: 50px;
         }
@@ -434,15 +427,6 @@ def ui():
 
         .action-btn:active:not(:disabled) {
             transform: translateY(0);
-        }
-
-        .action-btn.speed {
-            background: linear-gradient(135deg, #8b5cf6, #7c3aed);
-        }
-
-        .action-btn.speed:hover:not(:disabled) {
-            background: linear-gradient(135deg, #7c3aed, #6d28d9);
-            box-shadow: 0 10px 20px rgba(139, 92, 246, 0.3);
         }
 
         .section-title {
@@ -676,13 +660,13 @@ def ui():
 <body>
     <div class="container">
         <div class="header">
-            <h1>🛡️ Amnezia Panel</h1>
-            <p>Мониторинг и управление WireGuard пирами</p>
+            <h1>Shield Amnezia Panel</h1>
+            <p>Monitoring and management of WireGuard peers</p>
         </div>
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-icon">📊</div>
+                <div class="stat-icon">CPU</div>
                 <div class="stat-label">CPU</div>
                 <div class="stat-value" id="cpu">-</div>
                 <div class="stat-bar">
@@ -691,62 +675,48 @@ def ui():
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">💾</div>
+                <div class="stat-icon">RAM</div>
                 <div class="stat-label">RAM</div>
-                <div class="stat-value" id="ram" style="font-size: 20px;">-</div>
+                <div class="stat-value" id="ram" style="font-size: 16px;">-</div>
                 <div class="stat-bar">
                     <div class="stat-fill ram" id="ram-bar" style="width: 0%"></div>
                 </div>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">🗄️</div>
+                <div class="stat-icon">DISK</div>
                 <div class="stat-label">Disk</div>
-                <div class="stat-value" id="disk" style="font-size: 20px;">-</div>
+                <div class="stat-value" id="disk" style="font-size: 16px;">-</div>
                 <div class="stat-bar">
                     <div class="stat-fill disk" id="disk-bar" style="width: 0%"></div>
                 </div>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">�</div>
-                <div class="stat-label">Ping (Интернет)</div>
-                <div class="stat-value" id="ping-internet">-</div>
-                <button class="action-btn" id="ping-internet-btn" onclick="doPingInternet()">Проверить</button>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">🔒</div>
+                <div class="stat-icon">PING</div>
                 <div class="stat-label">Ping (VPN)</div>
                 <div class="stat-value" id="ping-vpn">-</div>
-                <button class="action-btn" id="ping-vpn-btn" onclick="doPingVPN()">Проверить</button>
+                <button class="action-btn" id="ping-vpn-btn" onclick="doPingVPN()">Check</button>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">⚡</div>
-                <div class="stat-label">Speedtest</div>
-                <div class="stat-value" id="speed" style="font-size: 16px;">-</div>
-                <button class="action-btn speed" id="speed-btn" onclick="doSpeedtest()">Начать</button>
-            </div>
-
-            <div class="stat-card">
-                <div class="stat-icon">📡</div>
-                <div class="stat-label">Трафик</div>
-                <div class="stat-value" id="traffic" style="font-size: 18px;">-</div>
+                <div class="stat-icon">TRAFFIC</div>
+                <div class="stat-label">Traffic</div>
+                <div class="stat-value" id="traffic" style="font-size: 16px;">-</div>
                 <div class="traffic-info">
                     <div class="traffic-row">
-                        <span>За месяц:</span>
+                        <span>Monthly:</span>
                         <span id="traffic-monthly">0 GB</span>
                     </div>
                     <div class="traffic-row">
-                        <span>Всего:</span>
+                        <span>Total:</span>
                         <span id="traffic-total">0 GB</span>
                     </div>
                 </div>
             </div>
         </div>
 
-        <h2 class="section-title">Активные пиры</h2>
+        <h2 class="section-title">Active Peers</h2>
         <div class="peers-grid" id="grid"></div>
     </div>
 
@@ -764,7 +734,7 @@ def ui():
                 grid.innerHTML = "";
 
                 if (data.length === 0) {
-                    grid.innerHTML = '<div class="empty-state"><p>📭 Нет активных пиров</p></div>';
+                    grid.innerHTML = '<div class="empty-state"><p>No active peers</p></div>';
                     return;
                 }
 
@@ -778,20 +748,20 @@ def ui():
                         
                         <div class="peer-status ${p.online ? 'online' : 'offline'}">
                             <div class="status-dot ${p.online ? 'online' : 'offline'}"></div>
-                            ${p.online ? '● Онлайн' : '● Не активен'}
+                            ${p.online ? 'Online' : 'Offline'}
                         </div>
 
                         <div class="peer-ip">${p.ip}</div>
 
                         <div class="peer-info">
-                            <span class="peer-info-label">Активность:</span>
+                            <span class="peer-info-label">Activity:</span>
                             <span>${p.hs}</span>
                         </div>
 
-                        <div class="peer-traffic">📤 ${p.tr}</div>
+                        <div class="peer-traffic">Traffic: ${p.tr}</div>
 
                         <div class="peer-rename" id="r${p.ip}">
-                            <input id="i${p.ip}" placeholder="Введите имя пира" value="${name}">
+                            <input id="i${p.ip}" placeholder="Enter peer name" value="${name}">
                             <button onclick="save('${p.ip}')">OK</button>
                         </div>
                     `;
@@ -878,30 +848,10 @@ def ui():
             }
         }
 
-        async function doPingInternet() {
-            const btn = document.getElementById('ping-internet-btn');
-            btn.disabled = true;
-            btn.innerText = 'Проверка...';
-
-            try {
-                const r = await fetch("/ping");
-                const p = await r.json();
-                document.getElementById("ping-internet").innerText = (p.ping_internet !== "-" ? p.ping_internet + " ms" : "-");
-            } catch (err) {
-                console.error('Ping error:', err);
-                document.getElementById("ping-internet").innerText = "Ошибка";
-            }
-
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.innerText = 'Проверить';
-            }, 1000);
-        }
-
         async function doPingVPN() {
             const btn = document.getElementById('ping-vpn-btn');
             btn.disabled = true;
-            btn.innerText = 'Проверка...';
+            btn.innerText = 'Checking...';
 
             try {
                 const r = await fetch("/ping");
@@ -909,35 +859,13 @@ def ui():
                 document.getElementById("ping-vpn").innerText = (p.ping_vpn !== "-" ? p.ping_vpn + " ms" : "-");
             } catch (err) {
                 console.error('Ping error:', err);
-                document.getElementById("ping-vpn").innerText = "Ошибка";
+                document.getElementById("ping-vpn").innerText = "Error";
             }
 
             setTimeout(() => {
                 btn.disabled = false;
-                btn.innerText = 'Проверить';
+                btn.innerText = 'Check';
             }, 1000);
-        }
-
-        async function doSpeedtest() {
-            const btn = document.getElementById('speed-btn');
-            const speedEl = document.getElementById('speed');
-            btn.disabled = true;
-            btn.innerText = 'Тестирование...';
-            speedEl.innerText = '⏳';
-
-            try {
-                const r = await fetch("/speedtest");
-                const s = await r.json();
-                speedEl.innerHTML = `<div style="font-size: 14px;">⬇️ ${s.download}<br>⬆️ ${s.upload}</div>`;
-            } catch (err) {
-                console.error('Speedtest error:', err);
-                speedEl.innerText = 'Ошибка';
-            }
-
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.innerText = 'Начать';
-            }, 2000);
         }
 
         load();
