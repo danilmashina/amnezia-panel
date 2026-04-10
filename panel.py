@@ -148,24 +148,17 @@ def speedtest():
 # --------- PEERS ---------
 
 def peers():
-    try:
-        out = subprocess.check_output(
-            "docker exec amnezia-awg wg show",
-            shell=True
-        ).decode()
-    except:
-        return []
+    out = subprocess.check_output(
+        "docker exec amnezia-awg wg show",
+        shell=True
+    ).decode()
 
     peers = out.split("peer: ")[1:]
     result = []
-    total_traffic = 0
 
     for p in peers:
         ip = re.search("allowed ips: (.*)", p)
         hs = re.search("latest handshake: (.*)", p)
-
-        if not ip:
-            continue
 
         ip = ip.group(1)
         hs = hs.group(1) if hs else "never"
@@ -176,12 +169,9 @@ def peers():
             online = True
 
         if "minute" in hs:
-            try:
-                n = int(hs.split()[0])
-                if n < 2:
-                    online = True
-            except:
-                pass
+            n = int(hs.split()[0])
+            if n < 2:
+                online = True
 
         m = re.search(
             "transfer: (.*) received, (.*) sent",
@@ -196,7 +186,6 @@ def peers():
             sb = bytes_from(s)
 
             total = rb + sb
-            total_traffic += total
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
         else:
@@ -218,7 +207,21 @@ def peers():
             "tr": tr
         })
 
-    # Обновляем трафик со всех пиров
+    # Собираем общий трафик со всех пиров
+    total_traffic = 0
+    for p in peers:
+        m = re.search(
+            "transfer: (.*) received, (.*) sent",
+            p
+        )
+        if m:
+            r = m.group(1)
+            s = m.group(2)
+            rb = bytes_from(r)
+            sb = bytes_from(s)
+            total_traffic += rb + sb
+    
+    # Обновляем трафик если есть данные
     if total_traffic > 0:
         update_traffic(total_traffic)
 
