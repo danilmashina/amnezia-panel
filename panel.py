@@ -1,52 +1,75 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import subprocess, re, os, time
+import subprocess, re, os, time, json
+from datetime import datetime
 
 app = FastAPI()
 
+TRAFFIC_FILE = "/opt/amnezia/traffic.json"
 
 # ---------------- helpers ----------------
 
 def parse_mem(v):
-
     m = re.match(r"([0-9.]+)([A-Za-z]+)", v.strip())
-
     if not m:
         return 0
-
     n = float(m.group(1))
     u = m.group(2)
-
     if u == "KiB": return n * 1024
     if u == "MiB": return n * 1024 * 1024
     if u == "GiB": return n * 1024 * 1024 * 1024
-
     return n
 
-
 def human(b):
-
     for u in ["B","KB","MB","GB","TB"]:
         if b < 1024:
             return f"{b:.1f} {u}"
         b /= 1024
 
-
 def bytes_from(v):
-
     m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", v)
-
     n = float(m.group(1))
     u = m.group(2)
-
     if u == "KiB": return n * 1024
     if u == "MiB": return n * 1024 * 1024
     if u == "GiB": return n * 1024 * 1024 * 1024
-
     return n
 
+# --------- Traffic File Management ---------
 
-# ---------------- CPU docker ----------------
+def get_traffic_data():
+    if not os.path.exists(TRAFFIC_FILE):
+        return {"monthly": 0, "total": 0, "last_month": 0}
+    
+    try:
+        with open(TRAFFIC_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {"monthly": 0, "total": 0, "last_month": 0}
+
+def save_traffic_data(data):
+    try:
+        os.makedirs(os.path.dirname(TRAFFIC_FILE), exist_ok=True)
+        with open(TRAFFIC_FILE, 'w') as f:
+            json.dump(data, f)
+    except:
+        pass
+
+def update_traffic(bytes_amount):
+    data = get_traffic_data()
+    current_month = datetime.now().month
+    
+    # Если месяц изменился, сбросить месячный счетчик
+    if 'last_month' in data and data['last_month'] != current_month:
+        data['monthly'] = 0
+    
+    data['monthly'] += bytes_amount
+    data['total'] += bytes_amount
+    data['last_month'] = current_month
+    
+    save_traffic_data(data)
+
+# --------- CPU docker ---------
 
 def cpu():
     try:
@@ -54,80 +77,80 @@ def cpu():
             "docker stats amnezia-awg --no-stream --format '{{.CPUPerc}}'",
             shell=True
         ).decode().strip()
-
         return out
-
     except:
         return "-"
 
-
-# ---------------- RAM ALL containers ----------------
+# --------- RAM ALL containers ---------
 
 def ram():
     try:
         out = subprocess.check_output("free -b", shell=True).decode().splitlines()[1].split()
-
         total = int(out[1])
         used = int(out[2])
-
         return f"{human(used)}/{human(total)}"
-
     except:
         return "-"
 
-
-# ---------------- DISK ----------------
+# --------- DISK ---------
 
 def disk():
-
     st = os.statvfs("/")
-
     total = st.f_blocks * st.f_frsize
     free = st.f_bfree * st.f_frsize
-
     used = total - free
-
     total = round(total/1024/1024/1024,1)
     used = round(used/1024/1024/1024,1)
-
     return f"{used}/{total} GB"
 
+# --------- PING через VPN ---------
 
-# ---------------- PING ----------------
-
-def ping():
-
+def ping_vpn():
     try:
         o = subprocess.check_output(
-            "ping -c 1 1.1.1.1",
-            shell=True
+            "ping -c 1 138.124.99.81",
+            shell=True,
+            timeout=5
         ).decode()
-
-        ms = re.search("time=(.*) ms",o).group(1)
-
+        ms = re.search("time=(.*) ms", o).group(1)
         return ms
-
     except:
         return "-"
 
+# --------- SPEEDTEST ---------
 
-# ---------------- PEERS ----------------
+def speedtest():
+    try:
+        # Проверяем наличие speedtest-cli
+        result = subprocess.check_output(
+            "speedtest-cli --simple",
+            shell=True,
+            timeout=300
+        ).decode().strip()
+        
+        lines = result.split('\n')
+        if len(lines) >= 2:
+            download = float(lines[0])  # Mbps
+            upload = float(lines[1])    # Mbps
+            return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
+        return {"download": "-", "upload": "-"}
+    except:
+        return {"download": "-", "upload": "-"}
+
+# --------- PEERS ---------
 
 def peers():
-
     out = subprocess.check_output(
         "docker exec amnezia-awg wg show",
         shell=True
     ).decode()
 
     peers = out.split("peer: ")[1:]
-
     result = []
 
     for p in peers:
-
-        ip = re.search("allowed ips: (.*)",p)
-        hs = re.search("latest handshake: (.*)",p)
+        ip = re.search("allowed ips: (.*)", p)
+        hs = re.search("latest handshake: (.*)", p)
 
         ip = ip.group(1)
         hs = hs.group(1) if hs else "never"
@@ -148,7 +171,6 @@ def peers():
         )
 
         if m:
-
             r = m.group(1)
             s = m.group(2)
 
@@ -158,7 +180,6 @@ def peers():
             total = rb + sb
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
-
         else:
             tr = "0"
 
@@ -180,13 +201,11 @@ def peers():
 
     return result
 
-
-# ---------------- API ----------------
+# --------- API ---------
 
 @app.get("/api")
 def api():
     return peers()
-
 
 @app.get("/stats")
 def stats():
@@ -196,13 +215,19 @@ def stats():
         "disk": disk()
     }
 
-
 @app.get("/ping")
 def p():
-    return {"ping": ping()}
+    return {"ping": ping_vpn()}
 
+@app.get("/speedtest")
+def speed():
+    return speedtest()
 
-# ---------------- UI ----------------
+@app.get("/traffic")
+def traffic():
+    return get_traffic_data()
+
+# --------- UI ---------
 
 @app.get("/", response_class=HTMLResponse)
 def ui():
@@ -275,7 +300,7 @@ def ui():
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 20px;
             margin-bottom: 50px;
         }
@@ -323,11 +348,12 @@ def ui():
         }
 
         .stat-value {
-            font-size: 28px;
+            font-size: 24px;
             font-weight: 700;
             color: #e2e8f0;
             margin-bottom: 12px;
             font-family: 'Courier New', monospace;
+            word-break: break-word;
         }
 
         .stat-bar {
@@ -358,7 +384,7 @@ def ui():
             background: linear-gradient(90deg, #10b981, #34d399);
         }
 
-        .ping-btn {
+        .action-btn {
             width: 100%;
             margin-top: 12px;
             padding: 10px 16px;
@@ -369,19 +395,34 @@ def ui():
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 13px;
+            font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            font-family: 'Inter', sans-serif;
         }
 
-        .ping-btn:hover {
+        .action-btn:hover:not(:disabled) {
             background: linear-gradient(135deg, #2563eb, #1d4ed8);
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
         }
 
-        .ping-btn:active {
+        .action-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .action-btn:active:not(:disabled) {
             transform: translateY(0);
+        }
+
+        .action-btn.speed {
+            background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+        }
+
+        .action-btn.speed:hover:not(:disabled) {
+            background: linear-gradient(135deg, #7c3aed, #6d28d9);
+            box-shadow: 0 10px 20px rgba(139, 92, 246, 0.3);
         }
 
         .section-title {
@@ -568,11 +609,18 @@ def ui():
             color: #94a3b8;
         }
 
-        .empty-state svg {
-            width: 80px;
-            height: 80px;
-            margin-bottom: 20px;
-            opacity: 0.5;
+        .traffic-info {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 6px;
+            padding: 6px 0;
+            border-top: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .traffic-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 3px 0;
         }
 
         @media (max-width: 768px) {
@@ -590,7 +638,7 @@ def ui():
             }
 
             .stat-value {
-                font-size: 20px;
+                font-size: 18px;
             }
 
             .peers-grid {
@@ -642,9 +690,32 @@ def ui():
 
             <div class="stat-card">
                 <div class="stat-icon">🌐</div>
-                <div class="stat-label">Ping</div>
+                <div class="stat-label">Ping (VPN)</div>
                 <div class="stat-value" id="ping">-</div>
-                <button class="ping-btn" onclick="doPing()">Проверить</button>
+                <button class="action-btn" id="ping-btn" onclick="doPing()">Проверить</button>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">⚡</div>
+                <div class="stat-label">Speedtest</div>
+                <div class="stat-value" id="speed" style="font-size: 16px;">-</div>
+                <button class="action-btn speed" id="speed-btn" onclick="doSpeedtest()">Начать</button>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">📡</div>
+                <div class="stat-label">Трафик</div>
+                <div class="stat-value" id="traffic" style="font-size: 18px;">-</div>
+                <div class="traffic-info">
+                    <div class="traffic-row">
+                        <span>За месяц:</span>
+                        <span id="traffic-monthly">0 GB</span>
+                    </div>
+                    <div class="traffic-row">
+                        <span>Всего:</span>
+                        <span id="traffic-total">0 GB</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -730,7 +801,6 @@ def ui():
                 document.getElementById("ram").innerText = s.ram;
                 document.getElementById("disk").innerText = s.disk;
 
-                // Parse CPU percentage
                 if (s.cpu && s.cpu !== "-") {
                     const cpuVal = parseFloat(s.cpu);
                     if (!isNaN(cpuVal)) {
@@ -738,7 +808,6 @@ def ui():
                     }
                 }
 
-                // Parse RAM percentage
                 if (s.ram && s.ram !== "-") {
                     const ramParts = s.ram.split("/");
                     if (ramParts.length === 2) {
@@ -751,7 +820,6 @@ def ui():
                     }
                 }
 
-                // Parse Disk percentage
                 if (s.disk && s.disk !== "-") {
                     const diskParts = s.disk.split("/");
                     if (diskParts.length === 2) {
@@ -768,8 +836,23 @@ def ui():
             }
         }
 
+        async function updateTraffic() {
+            try {
+                const r = await fetch("/traffic");
+                const t = await r.json();
+
+                const monthlyGB = (t.monthly / (1024 * 1024 * 1024)).toFixed(2);
+                const totalGB = (t.total / (1024 * 1024 * 1024)).toFixed(2);
+
+                document.getElementById("traffic-monthly").innerText = monthlyGB + " GB";
+                document.getElementById("traffic-total").innerText = totalGB + " GB";
+            } catch (err) {
+                console.error('Traffic error:', err);
+            }
+        }
+
         async function doPing() {
-            const btn = event.target;
+            const btn = document.getElementById('ping-btn');
             btn.disabled = true;
             btn.innerText = 'Проверка...';
 
@@ -788,14 +871,36 @@ def ui():
             }, 1000);
         }
 
-        // Initial load
+        async function doSpeedtest() {
+            const btn = document.getElementById('speed-btn');
+            const speedEl = document.getElementById('speed');
+            btn.disabled = true;
+            btn.innerText = 'Тестирование...';
+            speedEl.innerText = '⏳';
+
+            try {
+                const r = await fetch("/speedtest");
+                const s = await r.json();
+                speedEl.innerHTML = `<div style="font-size: 14px;">⬇️ ${s.download}<br>⬆️ ${s.upload}</div>`;
+            } catch (err) {
+                console.error('Speedtest error:', err);
+                speedEl.innerText = 'Ошибка';
+            }
+
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.innerText = 'Начать';
+            }, 2000);
+        }
+
         load();
         stats();
+        updateTraffic();
 
-        // Auto-refresh every 3 seconds
         setInterval(() => {
             load();
             stats();
+            updateTraffic();
         }, 3000);
     </script>
 </body>
