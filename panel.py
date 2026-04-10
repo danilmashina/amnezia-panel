@@ -148,21 +148,32 @@ def speedtest():
 # --------- PEERS ---------
 
 def peers():
-    out = subprocess.check_output(
-        "docker exec amnezia-awg wg show",
-        shell=True
-    ).decode()
+    try:
+        out = subprocess.check_output(
+            "docker exec amnezia-awg wg show",
+            shell=True
+        ).decode()
+    except:
+        return []
 
     peers = out.split("peer: ")[1:]
     result = []
     total_traffic = 0
 
     for p in peers:
-        ip = re.search("allowed ips: (.*)", p)
-        hs = re.search("latest handshake: (.*)", p)
+        # Ищем IP с маской или без
+        ip_match = re.search(r"allowed ips: ([\d.]+(?:/\d+)?)", p)
+        hs_match = re.search(r"latest handshake: (.*)", p)
 
-        ip = ip.group(1)
-        hs = hs.group(1) if hs else "never"
+        if not ip_match:
+            continue
+            
+        ip = ip_match.group(1).strip()
+        # Убираем маску если есть
+        if "/" in ip:
+            ip = ip.split("/")[0]
+            
+        hs = hs_match.group(1) if hs_match else "never"
 
         online = False
 
@@ -170,12 +181,15 @@ def peers():
             online = True
 
         if "minute" in hs:
-            n = int(hs.split()[0])
-            if n < 2:
-                online = True
+            try:
+                n = int(hs.split()[0])
+                if n < 2:
+                    online = True
+            except:
+                pass
 
         m = re.search(
-            "transfer: (.*) received, (.*) sent",
+            r"transfer: ([\d.]+\s+[A-Za-z]+) received, ([\d.]+\s+[A-Za-z]+) sent",
             p
         )
 
