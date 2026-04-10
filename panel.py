@@ -125,21 +125,24 @@ def ping_vpn():
 
 def speedtest():
     try:
-        # Используем просто speedtest команду
+        # Используем speedtest с флагом --simple для простого вывода
         result = subprocess.check_output(
             "speedtest --simple",
             shell=True,
-            timeout=300
+            timeout=300,
+            stderr=subprocess.DEVNULL
         ).decode().strip()
         
+        # Вывод должен быть: download\nupload
         lines = result.split('\n')
         if len(lines) >= 2:
             try:
-                download = float(lines[0])  # Mbps
-                upload = float(lines[1])    # Mbps
+                download = float(lines[0].strip())
+                upload = float(lines[1].strip())
                 return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
-            except:
+            except ValueError:
                 pass
+        
         return {"download": "-", "upload": "-"}
     except Exception as e:
         print(f"Speedtest error: {e}")
