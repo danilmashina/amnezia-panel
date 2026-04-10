@@ -155,7 +155,6 @@ def peers():
 
     peers = out.split("peer: ")[1:]
     result = []
-    total_traffic = 0
 
     for p in peers:
         ip = re.search("allowed ips: (.*)", p)
@@ -187,7 +186,6 @@ def peers():
             sb = bytes_from(s)
 
             total = rb + sb
-            total_traffic += total
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
         else:
@@ -208,10 +206,6 @@ def peers():
             "online": online,
             "tr": tr
         })
-
-    # Обновляем трафик после сбора всех данных
-    if total_traffic > 0:
-        update_traffic(total_traffic)
 
     return result
 
