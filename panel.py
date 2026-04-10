@@ -300,8 +300,8 @@ def ui():
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 15px;
             margin-bottom: 50px;
         }
 
@@ -309,8 +309,8 @@ def ui():
             background: rgba(30, 41, 59, 0.4);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 16px;
-            padding: 24px;
+            border-radius: 12px;
+            padding: 16px;
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
@@ -334,35 +334,35 @@ def ui():
         }
 
         .stat-icon {
-            font-size: 32px;
-            margin-bottom: 12px;
-        }
-
-        .stat-label {
-            font-size: 13px;
-            color: #94a3b8;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 600;
+            font-size: 24px;
             margin-bottom: 8px;
         }
 
+        .stat-label {
+            font-size: 11px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
         .stat-value {
-            font-size: 24px;
+            font-size: 16px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
             font-family: 'Courier New', monospace;
             word-break: break-word;
         }
 
         .stat-bar {
             width: 100%;
-            height: 6px;
+            height: 4px;
             background: rgba(71, 85, 105, 0.3);
-            border-radius: 3px;
+            border-radius: 2px;
             overflow: hidden;
-            margin-top: 12px;
+            margin-top: 8px;
         }
 
         .stat-fill {
@@ -386,18 +386,18 @@ def ui():
 
         .action-btn {
             width: 100%;
-            margin-top: 12px;
-            padding: 10px 16px;
+            margin-top: 8px;
+            padding: 8px 12px;
             background: linear-gradient(135deg, #3b82f6, #2563eb);
             border: none;
-            border-radius: 8px;
+            border-radius: 6px;
             color: white;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 12px;
+            font-size: 10px;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.3px;
             font-family: 'Inter', sans-serif;
         }
 
@@ -610,10 +610,10 @@ def ui():
         }
 
         .traffic-info {
-            font-size: 11px;
+            font-size: 9px;
             color: #94a3b8;
-            margin-top: 6px;
-            padding: 6px 0;
+            margin-top: 4px;
+            padding: 4px 0;
             border-top: 1px solid rgba(148, 163, 184, 0.1);
         }
 
