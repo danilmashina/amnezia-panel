@@ -224,6 +224,12 @@ def peers():
             "online": online,
             "tr": tr
         })
+        
+        total_new_traffic += rb + sb
+
+    # Обновляем трафик со всех пиров
+    if total_new_traffic > 0:
+        update_traffic(total_new_traffic)
 
     return result
 
@@ -326,7 +332,7 @@ def ui():
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
             gap: 12px;
             margin-bottom: 40px;
         }
@@ -713,9 +719,16 @@ def ui():
             </div>
 
             <div class="stat-card">
+                <div class="stat-icon">SPEED</div>
+                <div class="stat-label">Speedtest</div>
+                <div class="stat-value" id="speed" style="font-size: 12px;">-</div>
+                <button class="action-btn" id="speed-btn" onclick="doSpeedtest()">Start</button>
+            </div>
+
+            <div class="stat-card">
                 <div class="stat-icon">TRAFFIC</div>
                 <div class="stat-label">Traffic</div>
-                <div class="stat-value" id="traffic" style="font-size: 16px;">-</div>
+                <div class="stat-value" id="traffic" style="font-size: 12px;">-</div>
                 <div class="traffic-info">
                     <div class="traffic-row">
                         <span>Monthly:</span>
@@ -881,6 +894,28 @@ def ui():
             }, 1000);
         }
 
+        async function doSpeedtest() {
+            const btn = document.getElementById('speed-btn');
+            const speedEl = document.getElementById('speed');
+            btn.disabled = true;
+            btn.innerText = 'Testing...';
+            speedEl.innerText = 'Wait...';
+
+            try {
+                const r = await fetch("/speedtest");
+                const s = await r.json();
+                speedEl.innerHTML = `<div style="font-size: 11px;">D: ${s.download}<br>U: ${s.upload}</div>`;
+            } catch (err) {
+                console.error('Speedtest error:', err);
+                speedEl.innerText = 'Error';
+            }
+
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.innerText = 'Start';
+            }, 2000);
+        }
+
         load();
         stats();
         updateTraffic();
@@ -889,7 +924,7 @@ def ui():
             load();
             stats();
             updateTraffic();
-        }, 3000);
+        }, 10000);
     </script>
 </body>
 </html>
