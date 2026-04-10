@@ -9,23 +9,30 @@ TRAFFIC_FILE = "/opt/amnezia/traffic.json"
 
 # ---------------- helpers ----------------
 
+def parse_mem(v):
+    m = re.match(r"([0-9.]+)([A-Za-z]+)", v.strip())
+    if not m:
+        return 0
+    n = float(m.group(1))
+    u = m.group(2)
+    if u == "KiB": return n * 1024
+    if u == "MiB": return n * 1024 * 1024
+    if u == "GiB": return n * 1024 * 1024 * 1024
+    return n
+
 def human(b):
     for u in ["B","KB","MB","GB","TB"]:
         if b < 1024:
             return f"{b:.1f} {u}"
         b /= 1024
-    return f"{b:.1f} TB"
 
 def bytes_from(v):
     m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", v)
-    if not m:
-        return 0
     n = float(m.group(1))
-    u = m.group(2).strip()
+    u = m.group(2)
     if u == "KiB": return n * 1024
     if u == "MiB": return n * 1024 * 1024
     if u == "GiB": return n * 1024 * 1024 * 1024
-    if u == "B": return n
     return n
 
 # --------- Traffic File Management ---------
@@ -52,6 +59,7 @@ def update_traffic(bytes_amount):
     data = get_traffic_data()
     current_month = datetime.now().month
     
+    # Если месяц изменился, сбросить месячный счетчик
     if 'last_month' in data and data['last_month'] != current_month:
         data['monthly'] = 0
     
@@ -87,16 +95,13 @@ def ram():
 # --------- DISK ---------
 
 def disk():
-    try:
-        st = os.statvfs("/")
-        total = st.f_blocks * st.f_frsize
-        free = st.f_bfree * st.f_frsize
-        used = total - free
-        total = round(total/1024/1024/1024,1)
-        used = round(used/1024/1024/1024,1)
-        return f"{used}/{total} GB"
-    except:
-        return "-"
+    st = os.statvfs("/")
+    total = st.f_blocks * st.f_frsize
+    free = st.f_bfree * st.f_frsize
+    used = total - free
+    total = round(total/1024/1024/1024,1)
+    used = round(used/1024/1024/1024,1)
+    return f"{used}/{total} GB"
 
 # --------- PING через VPN ---------
 
@@ -107,10 +112,8 @@ def ping_vpn():
             shell=True,
             timeout=5
         ).decode()
-        ms = re.search(r"time=([\d.]+)", o)
-        if ms:
-            return ms.group(1)
-        return "-"
+        ms = re.search("time=(.*) ms", o).group(1)
+        return ms
     except:
         return "-"
 
@@ -118,84 +121,76 @@ def ping_vpn():
 
 def speedtest():
     try:
+        # Проверяем наличие speedtest-cli
         result = subprocess.check_output(
-            "speedtest --simple",
+            "speedtest-cli --simple",
             shell=True,
             timeout=300
         ).decode().strip()
         
         lines = result.split('\n')
         if len(lines) >= 2:
-            try:
-                download = float(lines[0])
-                upload = float(lines[1])
-                return {"download": f"{download:.1f}", "upload": f"{upload:.1f}"}
-            except:
-                return {"download": "-", "upload": "-"}
+            download = float(lines[0])  # Mbps
+            upload = float(lines[1])    # Mbps
+            return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
         return {"download": "-", "upload": "-"}
-    except Exception as e:
-        print(f"Speedtest error: {e}")
+    except:
         return {"download": "-", "upload": "-"}
 
 # --------- PEERS ---------
 
 def peers():
-    try:
-        out = subprocess.check_output(
-            "docker exec amnezia-awg wg show",
-            shell=True
-        ).decode()
-    except Exception as e:
-        print(f"Error running wg show: {e}")
-        return []
+    out = subprocess.check_output(
+        "docker exec amnezia-awg wg show",
+        shell=True
+    ).decode()
 
-    peers_list = out.split("peer: ")[1:]
+    peers = out.split("peer: ")[1:]
     result = []
-    total_traffic = 0
 
-    for p in peers_list:
-        # Ищем allowed ips - может быть с маской типа 10.8.1.4/32
-        ip_match = re.search(r"allowed ips: ([\d.]+(?:/\d+)?)", p)
-        hs_match = re.search(r"latest handshake: (.*)", p)
+    for p in peers:
+        ip = re.search("allowed ips: (.*)", p)
+        hs = re.search("latest handshake: (.*)", p)
 
-        if not ip_match:
-            continue
-            
-        ip = ip_match.group(1).strip()
-        # Убираем маску если есть
-        if "/" in ip:
-            ip = ip.split("/")[0]
-            
-        hs = hs_match.group(1) if hs_match else "never"
+        ip = ip.group(1)
+        hs = hs.group(1) if hs else "never"
 
         online = False
+
         if "second" in hs:
             online = True
-        elif "minute" in hs:
-            try:
-                n = int(hs.split()[0])
-                if n < 2:
-                    online = True
-            except:
-                pass
 
-        tr = "0"
-        rb = 0
-        sb = 0
-        
-        m = re.search(r"transfer: ([\d.]+\s+[A-Za-z]+) received, ([\d.]+\s+[A-Za-z]+) sent", p)
+        if "minute" in hs:
+            n = int(hs.split()[0])
+            if n < 2:
+                online = True
+
+        m = re.search(
+            "transfer: (.*) received, (.*) sent",
+            p
+        )
+
         if m:
             r = m.group(1)
             s = m.group(2)
 
             rb = bytes_from(r)
             sb = bytes_from(s)
+
             total = rb + sb
-            total_traffic += total
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
+        else:
+            tr = "0"
 
-        hs = hs.replace("seconds","сек").replace("second","сек").replace("minutes","мин").replace("minute","мин").replace("hours","ч").replace("hour","ч").replace("ago","назад").replace("never","никогда")
+        hs = hs.replace("seconds","сек")
+        hs = hs.replace("second","сек")
+        hs = hs.replace("minutes","мин")
+        hs = hs.replace("minute","мин")
+        hs = hs.replace("hours","ч")
+        hs = hs.replace("hour","ч")
+        hs = hs.replace("ago","назад")
+        hs = hs.replace("never","никогда")
 
         result.append({
             "ip": ip,
@@ -203,12 +198,6 @@ def peers():
             "online": online,
             "tr": tr
         })
-
-    if total_traffic > 0:
-        update_traffic(total_traffic)
-
-    return result    if total_traffic > 0:
-        update_traffic(total_traffic)
 
     return result
 
@@ -228,7 +217,7 @@ def stats():
 
 @app.get("/ping")
 def p():
-    return {"ping_vpn": ping_vpn()}
+    return {"ping": ping_vpn()}
 
 @app.get("/speedtest")
 def speed():
@@ -261,7 +250,7 @@ def ui():
             font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
             color: #e2e8f0;
-            padding: 20px;
+            padding: 40px 20px;
             min-height: 100vh;
             position: relative;
             overflow-x: hidden;
@@ -288,82 +277,99 @@ def ui():
         }
 
         .header {
-            margin-bottom: 30px;
+            margin-bottom: 50px;
             text-align: center;
         }
 
         .header h1 {
-            font-size: 32px;
+            font-size: 48px;
             font-weight: 700;
             background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            margin-bottom: 5px;
+            margin-bottom: 10px;
+            letter-spacing: -1px;
         }
 
         .header p {
             color: #94a3b8;
-            font-size: 12px;
+            font-size: 16px;
+            font-weight: 300;
         }
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-            gap: 12px;
-            margin-bottom: 40px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 50px;
         }
 
         .stat-card {
             background: rgba(30, 41, 59, 0.4);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 12px;
-            padding: 12px;
+            border-radius: 16px;
+            padding: 24px;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
         }
 
         .stat-card:hover {
             background: rgba(30, 41, 59, 0.6);
             border-color: rgba(148, 163, 184, 0.4);
-            transform: translateY(-3px);
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(59, 130, 246, 0.1);
         }
 
         .stat-icon {
-            font-size: 18px;
-            margin-bottom: 4px;
+            font-size: 32px;
+            margin-bottom: 12px;
         }
 
         .stat-label {
-            font-size: 10px;
+            font-size: 13px;
             color: #94a3b8;
             text-transform: uppercase;
+            letter-spacing: 1px;
             font-weight: 600;
-            margin-bottom: 4px;
+            margin-bottom: 8px;
         }
 
         .stat-value {
-            font-size: 14px;
+            font-size: 24px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 6px;
+            margin-bottom: 12px;
             font-family: 'Courier New', monospace;
             word-break: break-word;
         }
 
         .stat-bar {
             width: 100%;
-            height: 4px;
+            height: 6px;
             background: rgba(71, 85, 105, 0.3);
-            border-radius: 2px;
+            border-radius: 3px;
             overflow: hidden;
-            margin-top: 6px;
+            margin-top: 12px;
         }
 
         .stat-fill {
             height: 100%;
-            border-radius: 2px;
+            border-radius: 3px;
             transition: width 0.5s ease;
+            background: linear-gradient(90deg, #3b82f6, #06b6d4);
         }
 
         .stat-fill.cpu {
@@ -380,23 +386,25 @@ def ui():
 
         .action-btn {
             width: 100%;
-            margin-top: 6px;
-            padding: 6px 10px;
+            margin-top: 12px;
+            padding: 10px 16px;
             background: linear-gradient(135deg, #3b82f6, #2563eb);
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             color: white;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 10px;
+            font-size: 12px;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
             font-family: 'Inter', sans-serif;
         }
 
         .action-btn:hover:not(:disabled) {
             background: linear-gradient(135deg, #2563eb, #1d4ed8);
             transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
         }
 
         .action-btn:disabled {
@@ -404,42 +412,69 @@ def ui():
             cursor: not-allowed;
         }
 
+        .action-btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .action-btn.speed {
+            background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+        }
+
+        .action-btn.speed:hover:not(:disabled) {
+            background: linear-gradient(135deg, #7c3aed, #6d28d9);
+            box-shadow: 0 10px 20px rgba(139, 92, 246, 0.3);
+        }
+
         .section-title {
-            font-size: 18px;
+            font-size: 24px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
+            margin-bottom: 30px;
+            padding-bottom: 12px;
             border-bottom: 2px solid rgba(99, 102, 241, 0.3);
         }
 
         .peers-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 24px;
         }
 
         .peer-card {
             background: rgba(30, 41, 59, 0.4);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 12px;
-            padding: 16px;
+            border-radius: 16px;
+            padding: 24px;
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .peer-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
         }
 
         .peer-card:hover {
             background: rgba(30, 41, 59, 0.6);
             border-color: rgba(99, 102, 241, 0.5);
-            transform: translateY(-5px);
+            transform: translateY(-8px);
+            box-shadow: 0 25px 50px rgba(99, 102, 241, 0.15);
         }
 
         .peer-name {
-            font-size: 16px;
+            font-size: 18px;
             font-weight: 700;
             color: #e2e8f0;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
             cursor: pointer;
+            transition: color 0.2s;
             word-break: break-all;
         }
 
@@ -451,9 +486,9 @@ def ui():
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-bottom: 12px;
+            margin-bottom: 16px;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 14px;
         }
 
         .status-dot {
@@ -488,53 +523,131 @@ def ui():
 
         .peer-ip {
             font-family: 'Courier New', monospace;
-            font-size: 11px;
+            font-size: 13px;
             color: #cbd5e1;
             background: rgba(15, 23, 42, 0.5);
-            padding: 6px 10px;
-            border-radius: 6px;
-            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
             word-break: break-all;
             border: 1px solid rgba(71, 85, 105, 0.3);
         }
 
         .peer-info {
-            font-size: 11px;
+            font-size: 13px;
             color: #cbd5e1;
             margin-bottom: 8px;
             display: flex;
             justify-content: space-between;
+            align-items: center;
+        }
+
+        .peer-info-label {
+            color: #94a3b8;
         }
 
         .peer-traffic {
-            font-size: 11px;
+            font-size: 13px;
             color: #06b6d4;
             font-weight: 600;
-            margin-bottom: 10px;
-            padding: 6px 10px;
+            margin-bottom: 12px;
+            padding: 8px 12px;
             background: rgba(6, 182, 212, 0.1);
-            border-radius: 6px;
+            border-radius: 8px;
             border-left: 3px solid #06b6d4;
+        }
+
+        .peer-rename {
+            display: none;
+            margin-top: 12px;
+            gap: 8px;
+        }
+
+        .peer-rename.active {
+            display: flex;
+        }
+
+        .peer-rename input {
+            flex: 1;
+            padding: 8px 12px;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid rgba(99, 102, 241, 0.5);
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-size: 13px;
+            transition: border-color 0.2s;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .peer-rename input:focus {
+            outline: none;
+            border-color: rgba(99, 102, 241, 1);
+            background: rgba(15, 23, 42, 0.9);
+        }
+
+        .peer-rename button {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 12px;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .peer-rename button:hover {
+            background: linear-gradient(135deg, #4f46e5, #4338ca);
+            transform: translateY(-2px);
         }
 
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
+            padding: 60px 20px;
             color: #94a3b8;
         }
 
         .traffic-info {
-            font-size: 9px;
+            font-size: 11px;
             color: #94a3b8;
-            margin-top: 3px;
-            padding: 3px 0;
+            margin-top: 6px;
+            padding: 6px 0;
             border-top: 1px solid rgba(148, 163, 184, 0.1);
         }
 
         .traffic-row {
             display: flex;
             justify-content: space-between;
-            margin: 2px 0;
+            margin: 3px 0;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 36px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 12px;
+            }
+
+            .stat-card {
+                padding: 16px;
+            }
+
+            .stat-value {
+                font-size: 18px;
+            }
+
+            .peers-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .peer-card {
+                padding: 16px;
+            }
         }
 
     </style>
@@ -543,13 +656,13 @@ def ui():
 <body>
     <div class="container">
         <div class="header">
-            <h1>Shield Amnezia Panel</h1>
-            <p>Monitoring and management of WireGuard peers</p>
+            <h1>🛡️ Amnezia Panel</h1>
+            <p>Мониторинг и управление WireGuard пирами</p>
         </div>
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-icon">CPU</div>
+                <div class="stat-icon">📊</div>
                 <div class="stat-label">CPU</div>
                 <div class="stat-value" id="cpu">-</div>
                 <div class="stat-bar">
@@ -558,55 +671,55 @@ def ui():
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">RAM</div>
+                <div class="stat-icon">💾</div>
                 <div class="stat-label">RAM</div>
-                <div class="stat-value" id="ram" style="font-size: 12px;">-</div>
+                <div class="stat-value" id="ram" style="font-size: 20px;">-</div>
                 <div class="stat-bar">
                     <div class="stat-fill ram" id="ram-bar" style="width: 0%"></div>
                 </div>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">DISK</div>
+                <div class="stat-icon">🗄️</div>
                 <div class="stat-label">Disk</div>
-                <div class="stat-value" id="disk" style="font-size: 12px;">-</div>
+                <div class="stat-value" id="disk" style="font-size: 20px;">-</div>
                 <div class="stat-bar">
                     <div class="stat-fill disk" id="disk-bar" style="width: 0%"></div>
                 </div>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">PING</div>
+                <div class="stat-icon">🌐</div>
                 <div class="stat-label">Ping (VPN)</div>
-                <div class="stat-value" id="ping-vpn">-</div>
-                <button class="action-btn" id="ping-vpn-btn" onclick="doPingVPN()">Check</button>
+                <div class="stat-value" id="ping">-</div>
+                <button class="action-btn" id="ping-btn" onclick="doPing()">Проверить</button>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">SPEED</div>
+                <div class="stat-icon">⚡</div>
                 <div class="stat-label">Speedtest</div>
-                <div class="stat-value" id="speed" style="font-size: 11px;">-</div>
-                <button class="action-btn" id="speed-btn" onclick="doSpeedtest()">Start</button>
+                <div class="stat-value" id="speed" style="font-size: 16px;">-</div>
+                <button class="action-btn speed" id="speed-btn" onclick="doSpeedtest()">Начать</button>
             </div>
 
             <div class="stat-card">
-                <div class="stat-icon">TRAFFIC</div>
-                <div class="stat-label">Traffic</div>
-                <div class="stat-value" id="traffic" style="font-size: 12px;">-</div>
+                <div class="stat-icon">📡</div>
+                <div class="stat-label">Трафик</div>
+                <div class="stat-value" id="traffic" style="font-size: 18px;">-</div>
                 <div class="traffic-info">
                     <div class="traffic-row">
-                        <span>Monthly:</span>
+                        <span>За месяц:</span>
                         <span id="traffic-monthly">0 GB</span>
                     </div>
                     <div class="traffic-row">
-                        <span>Total:</span>
+                        <span>Всего:</span>
                         <span id="traffic-total">0 GB</span>
                     </div>
                 </div>
             </div>
         </div>
 
-        <h2 class="section-title">Active Peers</h2>
+        <h2 class="section-title">Активные пиры</h2>
         <div class="peers-grid" id="grid"></div>
     </div>
 
@@ -623,8 +736,8 @@ def ui():
                 const grid = document.getElementById('grid');
                 grid.innerHTML = "";
 
-                if (!data || data.length === 0) {
-                    grid.innerHTML = '<div class="empty-state"><p>No active peers</p></div>';
+                if (data.length === 0) {
+                    grid.innerHTML = '<div class="empty-state"><p>📭 Нет активных пиров</p></div>';
                     return;
                 }
 
@@ -638,17 +751,22 @@ def ui():
                         
                         <div class="peer-status ${p.online ? 'online' : 'offline'}">
                             <div class="status-dot ${p.online ? 'online' : 'offline'}"></div>
-                            ${p.online ? 'Online' : 'Offline'}
+                            ${p.online ? '● Онлайн' : '● Не активен'}
                         </div>
 
                         <div class="peer-ip">${p.ip}</div>
 
                         <div class="peer-info">
-                            <span>Activity:</span>
+                            <span class="peer-info-label">Активность:</span>
                             <span>${p.hs}</span>
                         </div>
 
-                        <div class="peer-traffic">${p.tr}</div>
+                        <div class="peer-traffic">📤 ${p.tr}</div>
+
+                        <div class="peer-rename" id="r${p.ip}">
+                            <input id="i${p.ip}" placeholder="Введите имя пира" value="${name}">
+                            <button onclick="save('${p.ip}')">OK</button>
+                        </div>
                     `;
 
                     grid.appendChild(card);
@@ -660,12 +778,18 @@ def ui():
 
         function rename(ip) {
             editing = ip;
-            const input = prompt('Enter peer name:', localStorage[ip] || ip);
-            if (input) {
-                localStorage[ip] = input;
-                load();
+            const renameEl = document.getElementById("r" + ip);
+            renameEl.classList.add('active');
+            document.getElementById("i" + ip).focus();
+        }
+
+        function save(ip) {
+            const v = document.getElementById("i" + ip).value;
+            if (v.trim()) {
+                localStorage[ip] = v;
             }
             editing = null;
+            load();
         }
 
         async function stats() {
@@ -727,23 +851,23 @@ def ui():
             }
         }
 
-        async function doPingVPN() {
-            const btn = document.getElementById('ping-vpn-btn');
+        async function doPing() {
+            const btn = document.getElementById('ping-btn');
             btn.disabled = true;
-            btn.innerText = 'Checking...';
+            btn.innerText = 'Проверка...';
 
             try {
                 const r = await fetch("/ping");
                 const p = await r.json();
-                document.getElementById("ping-vpn").innerText = (p.ping_vpn !== "-" ? p.ping_vpn + " ms" : "-");
+                document.getElementById("ping").innerText = (p.ping !== "-" ? p.ping + " ms" : "-");
             } catch (err) {
                 console.error('Ping error:', err);
-                document.getElementById("ping-vpn").innerText = "Error";
+                document.getElementById("ping").innerText = "Ошибка";
             }
 
             setTimeout(() => {
                 btn.disabled = false;
-                btn.innerText = 'Check';
+                btn.innerText = 'Проверить';
             }, 1000);
         }
 
@@ -751,21 +875,21 @@ def ui():
             const btn = document.getElementById('speed-btn');
             const speedEl = document.getElementById('speed');
             btn.disabled = true;
-            btn.innerText = 'Testing...';
-            speedEl.innerText = 'Wait...';
+            btn.innerText = 'Тестирование...';
+            speedEl.innerText = '⏳';
 
             try {
                 const r = await fetch("/speedtest");
                 const s = await r.json();
-                speedEl.innerHTML = `<div style="font-size: 11px;">D: ${s.download} Mbps<br>U: ${s.upload} Mbps</div>`;
+                speedEl.innerHTML = `<div style="font-size: 14px;">⬇️ ${s.download}<br>⬆️ ${s.upload}</div>`;
             } catch (err) {
                 console.error('Speedtest error:', err);
-                speedEl.innerText = 'Error';
+                speedEl.innerText = 'Ошибка';
             }
 
             setTimeout(() => {
                 btn.disabled = false;
-                btn.innerText = 'Start';
+                btn.innerText = 'Начать';
             }, 2000);
         }
 
@@ -777,7 +901,7 @@ def ui():
             load();
             stats();
             updateTraffic();
-        }, 10000);
+        }, 3000);
     </script>
 </body>
 </html>
