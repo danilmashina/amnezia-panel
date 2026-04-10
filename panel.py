@@ -101,16 +101,14 @@ def ram():
         ).decode().strip()
         
         total_used = 0
-        total_limit = 0
         
         for line in out.split('\n'):
             if line and '/' in line:
                 parts = line.split('/')
                 if len(parts) == 2:
                     used_str = parts[0].strip()
-                    limit_str = parts[1].strip()
                     
-                    # Парсим used
+                    # Парсим только used (левую часть)
                     m = re.match(r"([\d.]+)([A-Za-z]+)", used_str)
                     if m:
                         val = float(m.group(1))
@@ -118,17 +116,9 @@ def ram():
                         if unit == "KiB": total_used += val * 1024
                         elif unit == "MiB": total_used += val * 1024 * 1024
                         elif unit == "GiB": total_used += val * 1024 * 1024 * 1024
-                    
-                    # Парсим limit
-                    m = re.match(r"([\d.]+)([A-Za-z]+)", limit_str)
-                    if m:
-                        val = float(m.group(1))
-                        unit = m.group(2)
-                        if unit == "KiB": total_limit += val * 1024
-                        elif unit == "MiB": total_limit += val * 1024 * 1024
-                        elif unit == "GiB": total_limit += val * 1024 * 1024 * 1024
         
-        return f"{human(total_used)}/{human(total_limit)}"
+        # Показываем только используемую память (лимит 2GB)
+        return f"{human(total_used)}/2.0 GB"
     except:
         return "-"
 
