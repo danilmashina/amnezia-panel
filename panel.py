@@ -6,6 +6,7 @@ from datetime import datetime
 app = FastAPI()
 
 TRAFFIC_FILE = "/opt/amnezia/traffic.json"
+last_peer_totals = {}
 
 # ---------------- helpers ----------------
 
@@ -155,7 +156,6 @@ def peers():
 
     peers = out.split("peer: ")[1:]
     result = []
-    total_traffic = 0
 
     for p in peers:
         ip = re.search("allowed ips: (.*)", p)
@@ -187,7 +187,14 @@ def peers():
             sb = bytes_from(s)
 
             total = rb + sb
-            total_traffic += total
+            
+            # Считаем только разницу трафика (delta)
+            key = ip
+            prev = last_peer_totals.get(key, total)
+            diff = total - prev
+            if diff > 0 and diff < 10 * 1024 * 1024 * 1024:
+                update_traffic(diff)
+            last_peer_totals[key] = total
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
         else:
@@ -208,10 +215,6 @@ def peers():
             "online": online,
             "tr": tr
         })
-
-    # Обновляем трафик если есть данные
-    if total_traffic > 0:
-        update_traffic(total_traffic)
 
     return result
 
