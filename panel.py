@@ -1,48 +1,21 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-import subprocess, re, json, os, time, datetime
+from fastapi.responses import HTMLResponse, JSONResponse
+import subprocess, re, json, os, datetime, time
 
 app = FastAPI()
-DB="users.json"
-TRAFFIC_DB="traffic.json"
 
+DB="names.json"
+TRAFFIC="traffic.json"
 
-def load_json(path):
+def load(path):
     if not os.path.exists(path):
         return {}
     return json.load(open(path))
 
-
-def save_json(path,data):
+def save(path,data):
     json.dump(data,open(path,"w"))
 
-
-def translate_time(t):
-
-    t=t.replace("seconds","сек")
-    t=t.replace("second","сек")
-    t=t.replace("minutes","мин")
-    t=t.replace("minute","мин")
-    t=t.replace("hours","ч")
-    t=t.replace("hour","ч")
-
-    return t
-
-
-def parse_online(hs):
-
-    if "second" in hs:
-        return True
-
-    if "minute" in hs:
-        n=int(hs.split()[0])
-        if n < 10:
-            return True
-
-    return False
-
-
-def to_bytes(v):
+def bytes_from(v):
 
     n=float(v.split()[0])
     u=v.split()[1]
@@ -53,73 +26,70 @@ def to_bytes(v):
 
     return n
 
-
-def human(v):
+def human(b):
 
     for u in ["B","KB","MB","GB","TB"]:
-        if v<1024:
-            return f"{v:.1f} {u}"
-        v/=1024
+        if b<1024:
+            return f"{b:.1f} {u}"
+        b/=1024
 
+def cpu():
 
-def get_total():
+    with open("/proc/stat") as f:
+        l=f.readline()
 
-    out=subprocess.check_output(
-        "docker exec amnezia-awg wg show",
-        shell=True
-    ).decode()
+    v=list(map(int,l.split()[1:]))
 
-    total=0
+    idle=v[3]
+    total=sum(v)
 
-    for line in out.splitlines():
+    time.sleep(0.1)
 
-        if "transfer:" in line:
+    with open("/proc/stat") as f:
+        l=f.readline()
 
-            m=re.search("transfer: (.*) received, (.*) sent",line)
-            if not m: continue
+    v2=list(map(int,l.split()[1:]))
 
-            r=m.group(1)
-            s=m.group(2)
+    idle2=v2[3]
+    total2=sum(v2)
 
-            total+=to_bytes(r)
-            total+=to_bytes(s)
+    cpu=100*(1-(idle2-idle)/(total2-total))
 
-    return total
+    return round(cpu,1)
 
+def ram():
 
-def traffic_stats():
+    m=open("/proc/meminfo").read()
 
-    now=datetime.datetime.now()
-    today=now.strftime("%Y-%m-%d")
-    month=now.strftime("%Y-%m")
+    total=int(re.search(r"MemTotal:\s+(\d+)",m).group(1))
+    free=int(re.search(r"MemAvailable:\s+(\d+)",m).group(1))
 
-    db=load_json(TRAFFIC_DB)
+    used=total-free
 
-    total=get_total()
+    total=round(total/1024/1024,1)
+    used=round(used/1024/1024,1)
 
-    if "start_total" not in db:
-        db["start_total"]=total
+    return f"{used}/{total} GB"
 
-    if "today" not in db or db["today"]!=today:
-        db["today"]=today
-        db["today_start"]=total
+def disk():
 
-    if "month" not in db or db["month"]!=month:
-        db["month"]=month
-        db["month_start"]=total
+    st=os.statvfs("/")
 
-    save_json(TRAFFIC_DB,db)
+    total=st.f_blocks*st.f_frsize
+    free=st.f_bfree*st.f_frsize
 
-    today_bytes=total-db["today_start"]
-    month_bytes=total-db["month_start"]
-    total_bytes=total-db["start_total"]
+    used=total-free
 
-    return {
-        "today":human(today_bytes),
-        "month":human(month_bytes),
-        "total":human(total_bytes)
-    }
+    return f"{round(used/1024/1024/1024,1)}/{round(total/1024/1024/1024,1)} GB"
 
+def ping():
+
+    try:
+        o=subprocess.check_output("ping -c 1 1.1.1.1",shell=True).decode()
+        ms=re.search("time=(.*) ms",o).group(1)
+        return ms
+    except:
+        return "-"
 
 def peers():
 
@@ -129,7 +99,8 @@ def peers():
     ).decode()
 
     peers=out.split("peer: ")[1:]
-    data=[]
+
+    res=[]
 
     for p in peers:
 
@@ -137,110 +108,153 @@ def peers():
         hs=re.search("latest handshake: (.*)",p)
         tr=re.search("transfer: (.*)",p)
 
-        ip=ip.group(1) if ip else "-"
-        hs=hs.group(1) if hs else "никогда"
-        hs=translate_time(hs)
+        ip=ip.group(1)
+        hs=hs.group(1) if hs else "never"
 
-        tr=tr.group(1) if tr else "0"
-        tr=tr.replace("received","↓")
-        tr=tr.replace("sent","↑")
+        online=False
 
-        online=parse_online(hs)
+        if "second" in hs:
+            online=True
 
-        data.append({
+        if "minute" in hs:
+            n=int(hs.split()[0])
+            if n < 3:
+                online=True
+
+        if tr:
+
+            m=re.search("transfer: (.*) received, (.*) sent",p)
+
+            r=m.group(1)
+            s=m.group(2)
+
+            rb=bytes_from(r)
+            sb=bytes_from(s)
+
+            total=rb+sb
+
+            tr=f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
+
+        else:
+            tr="0"
+
+        hs=hs.replace("seconds","сек")
+        hs=hs.replace("second","сек")
+        hs=hs.replace("minutes","мин")
+        hs=hs.replace("minute","мин")
+        hs=hs.replace("hours","ч")
+        hs=hs.replace("hour","ч")
+        hs=hs.replace("ago","назад")
+
+        res.append({
             "ip":ip,
             "hs":hs,
-            "tr":tr,
-            "online":online
+            "online":online,
+            "tr":tr
         })
 
-    return data
-
-
-def disk():
-    st=os.statvfs("/")
-    total=st.f_blocks*st.f_frsize
-    free=st.f_bfree*st.f_frsize
-    used=total-free
-
-    total=round(total/1024/1024/1024,1)
-    used=round(used/1024/1024/1024,1)
-
-    return f"{used}/{total} GB"
-
-
-def ping():
-    try:
-        out=subprocess.check_output(
-            "ping -c 1 1.1.1.1",
-            shell=True
-        ).decode()
-
-        ms=re.search("time=(.*) ms",out).group(1)
-        return ms
-    except:
-        return "-"
-
-
-def system():
-
-    load = open("/proc/loadavg").read().split()[0]
-
-    mem = open("/proc/meminfo").read()
-
-    total = int(re.search(r"MemTotal:\s+(\d+)",mem).group(1))
-    free = int(re.search(r"MemAvailable:\s+(\d+)",mem).group(1))
-
-    used = total - free
-
-    total = round(total/1024/1024,1)
-    used = round(used/1024/1024,1)
-
-    t=traffic_stats()
-
-    return {
-        "cpu": load,
-        "ram": f"{used}/{total} GB",
-        "disk": disk(),
-        "ping": ping(),
-        "today": t["today"],
-        "month": t["month"],
-        "total": t["total"]
-    }
-
+    return res
 
 @app.get("/api")
 def api():
     return peers()
 
-
 @app.get("/stats")
 def stats():
-    return system()
 
+    return {
+        "cpu":cpu(),
+        "ram":ram(),
+        "disk":disk()
+    }
+
+@app.get("/ping")
+def p():
+    return {"ping":ping()}
 
 @app.get("/",response_class=HTMLResponse)
 def ui():
+
     return """
 <html>
 <head>
 
 <style>
-body{background:#020617;color:white;font-family:Inter;padding:20px}
-.top{display:flex;gap:15px;margin-bottom:20px;flex-wrap:wrap}
-.stat{background:#020617;border:1px solid #1e293b;padding:15px;border-radius:12px;min-width:150px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,320px);gap:15px}
-.card{background:#020617;border:1px solid #1e293b;padding:15px;border-radius:14px}
-.name{font-weight:bold}
+
+body{
+background:#020617;
+color:white;
+font-family:Inter;
+padding:20px
+}
+
+.top{
+display:flex;
+gap:15px;
+margin-bottom:20px;
+flex-wrap:wrap
+}
+
+.stat{
+background:#020617;
+border:1px solid #1e293b;
+padding:14px;
+border-radius:12px;
+min-width:140px
+}
+
+.grid{
+display:grid;
+grid-template-columns:repeat(auto-fill,320px);
+gap:15px
+}
+
+.card{
+background:#020617;
+border:1px solid #1e293b;
+padding:15px;
+border-radius:14px;
+transition:0.2s
+}
+
+.card:hover{
+border-color:#3b82f6;
+box-shadow:0 0 20px rgba(59,130,246,.2)
+}
+
+.name{
+font-weight:bold;
+cursor:pointer;
+font-size:16px
+}
+
 .online{color:#22c55e}
-.offline{color:#6b7280}
-.ip{color:#94a3b8}
+.offline{color:#64748b}
 .tr{color:#38bdf8}
+
+.rename{
+display:none;
+margin-top:8px
+}
+
+button{
+background:#2563eb;
+border:none;
+padding:6px 12px;
+border-radius:6px;
+color:white;
+cursor:pointer
+}
+
 </style>
 
 <script>
 
+let editing=null
+
 async function load(){
+
+if(editing) return
 
 r=await fetch("/api")
 data=await r.json()
@@ -252,23 +266,49 @@ data.forEach(p=>{
 name=localStorage[p.ip]||p.ip
 
 grid.innerHTML+=`
+
 <div class="card">
 
-<div class="name">${name}</div>
-
-<div class="${p.online?'online':'offline'}">
-${p.online?'🟢 Онлайн':'⚫ Не активен'}
+<div class="name" onclick="rename('${p.ip}')">
+${name}
 </div>
 
-<div class="ip">${p.ip}</div>
+<div class="${p.online?'online':'offline'}">
+${p.online?'● Онлайн':'● Не активен'}
+</div>
+
+<div>${p.ip}</div>
 
 <div>Активность: ${p.hs}</div>
 
-<div class="tr">Трафик: ${p.tr}</div>
+<div class="tr">${p.tr}</div>
+
+<div class="rename" id="r${p.ip}">
+<input id="i${p.ip}">
+<button onclick="save('${p.ip}')">OK</button>
+</div>
 
 </div>
 `
 })
+}
+
+function rename(ip){
+
+editing=ip
+document.getElementById("r"+ip).style.display="block"
+
+}
+
+function save(ip){
+
+v=document.getElementById("i"+ip).value
+
+localStorage[ip]=v
+
+editing=null
+
+load()
 }
 
 async function stats(){
@@ -276,13 +316,18 @@ async function stats(){
 r=await fetch("/stats")
 s=await r.json()
 
-cpu.innerText=s.cpu
+cpu.innerText=s.cpu+" %"
 ram.innerText=s.ram
 disk.innerText=s.disk
-ping.innerText=s.ping+" ms"
-today.innerText=s.today
-month.innerText=s.month
-total.innerText=s.total
+
+}
+
+async function doPing(){
+
+r=await fetch("/ping")
+p=await r.json()
+
+ping.innerText=p.ping+" ms"
 
 }
 
@@ -301,11 +346,13 @@ setInterval(()=>{load();stats()},3000)
 <div class="stat">CPU<br><span id="cpu"></span></div>
 <div class="stat">RAM<br><span id="ram"></span></div>
 <div class="stat">Disk<br><span id="disk"></span></div>
-<div class="stat">Ping<br><span id="ping"></span></div>
 
-<div class="stat">Сегодня<br><span id="today"></span></div>
-<div class="stat">Месяц<br><span id="month"></span></div>
-<div class="stat">Всего<br><span id="total"></span></div>
+<div class="stat">
+Ping<br>
+<span id="ping">-</span>
+<br>
+<button onclick="doPing()">ping</button>
+</div>
 
 </div>
 
