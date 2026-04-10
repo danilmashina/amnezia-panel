@@ -125,25 +125,22 @@ def ping_vpn():
 
 def speedtest():
     try:
-        # Используем speedtest с флагом --simple для простого вывода
+        # Используем speedtest с JSON форматом
         result = subprocess.check_output(
-            "speedtest --simple",
+            "speedtest -f json",
             shell=True,
             timeout=300,
             stderr=subprocess.DEVNULL
         ).decode().strip()
         
-        # Вывод должен быть: download\nupload
-        lines = result.split('\n')
-        if len(lines) >= 2:
-            try:
-                download = float(lines[0].strip())
-                upload = float(lines[1].strip())
-                return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
-            except ValueError:
-                pass
+        # Парсим JSON
+        data = json.loads(result)
         
-        return {"download": "-", "upload": "-"}
+        # Извлекаем download и upload в Mbps
+        download = data.get('download', {}).get('bandwidth', 0) * 8 / 1000000  # Convert to Mbps
+        upload = data.get('upload', {}).get('bandwidth', 0) * 8 / 1000000  # Convert to Mbps
+        
+        return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
     except Exception as e:
         print(f"Speedtest error: {e}")
         return {"download": "-", "upload": "-"}
