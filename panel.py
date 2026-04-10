@@ -1,8 +1,50 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import subprocess, re, os, json
+import subprocess, re, os, time
 
 app = FastAPI()
+
+
+# ---------------- helpers ----------------
+
+def parse_mem(v):
+
+    m = re.match(r"([0-9.]+)([A-Za-z]+)", v.strip())
+
+    if not m:
+        return 0
+
+    n = float(m.group(1))
+    u = m.group(2)
+
+    if u == "KiB": return n * 1024
+    if u == "MiB": return n * 1024 * 1024
+    if u == "GiB": return n * 1024 * 1024 * 1024
+
+    return n
+
+
+def human(b):
+
+    for u in ["B","KB","MB","GB","TB"]:
+        if b < 1024:
+            return f"{b:.1f} {u}"
+        b /= 1024
+
+
+def bytes_from(v):
+
+    m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", v)
+
+    n = float(m.group(1))
+    u = m.group(2)
+
+    if u == "KiB": return n * 1024
+    if u == "MiB": return n * 1024 * 1024
+    if u == "GiB": return n * 1024 * 1024 * 1024
+
+    return n
+
 
 # ---------------- CPU docker ----------------
 
@@ -14,11 +56,12 @@ def cpu():
         ).decode().strip()
 
         return out
+
     except:
         return "-"
 
 
-# ---------------- RAM docker ----------------
+# ---------------- RAM ALL containers ----------------
 
 def ram():
     try:
@@ -31,7 +74,11 @@ def ram():
         total_limit = 0
 
         for line in out:
-            used, limit = line.split(" / ")
+
+            if "/" not in line:
+                continue
+
+            used, limit = line.split("/")
 
             total_used += parse_mem(used)
             total_limit += parse_mem(limit)
@@ -77,41 +124,7 @@ def ping():
         return "-"
 
 
-# ---------------- bytes ----------------
-
-def bytes_from(v):
-
-    n = float(v.split()[0])
-    u = v.split()[1]
-
-    if u == "KiB": return n * 1024
-    if u == "MiB": return n * 1024 * 1024
-    if u == "GiB": return n * 1024 * 1024 * 1024
-
-    return n
-
-
-def human(b):
-
-    for u in ["B","KB","MB","GB","TB"]:
-        if b < 1024:
-            return f"{b:.1f} {u}"
-        b /= 1024
-
-# ---------------- peers mem ----------------
-
-def parse_mem(v):
-
-    n = float(v.split()[0])
-    u = v.split()[1]
-
-    if u == "KiB": return n * 1024
-    if u == "MiB": return n * 1024 * 1024
-    if u == "GiB": return n * 1024 * 1024 * 1024
-
-    return n
-
-# ---------------- peers ----------------
+# ---------------- PEERS ----------------
 
 def peers():
 
@@ -128,7 +141,6 @@ def peers():
 
         ip = re.search("allowed ips: (.*)",p)
         hs = re.search("latest handshake: (.*)",p)
-        tr = re.search("transfer: (.*)",p)
 
         ip = ip.group(1)
         hs = hs.group(1) if hs else "never"
@@ -143,12 +155,12 @@ def peers():
             if n < 2:
                 online = True
 
-        if tr:
+        m = re.search(
+            "transfer: (.*) received, (.*) sent",
+            p
+        )
 
-            m = re.search(
-                "transfer: (.*) received, (.*) sent",
-                p
-            )
+        if m:
 
             r = m.group(1)
             s = m.group(2)
@@ -208,7 +220,6 @@ def p():
 @app.get("/", response_class=HTMLResponse)
 def ui():
     return """
-
 <html>
 
 <head>
