@@ -1,182 +1,194 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
-import subprocess, re, json, os, datetime, time
+from fastapi.responses import HTMLResponse
+import subprocess, re, os, json
 
 app = FastAPI()
 
-DB="names.json"
-TRAFFIC="traffic.json"
-
-def load(path):
-    if not os.path.exists(path):
-        return {}
-    return json.load(open(path))
-
-def save(path,data):
-    json.dump(data,open(path,"w"))
-
-def bytes_from(v):
-
-    n=float(v.split()[0])
-    u=v.split()[1]
-
-    if u=="KiB": return n*1024
-    if u=="MiB": return n*1024*1024
-    if u=="GiB": return n*1024*1024*1024
-
-    return n
-
-def human(b):
-
-    for u in ["B","KB","MB","GB","TB"]:
-        if b<1024:
-            return f"{b:.1f} {u}"
-        b/=1024
+# ---------------- CPU docker ----------------
 
 def cpu():
+    try:
+        out = subprocess.check_output(
+            "docker stats amnezia-awg --no-stream --format '{{.CPUPerc}}'",
+            shell=True
+        ).decode().strip()
 
-    with open("/proc/stat") as f:
-        l=f.readline()
+        return out
+    except:
+        return "-"
 
-    v=list(map(int,l.split()[1:]))
 
-    idle=v[3]
-    total=sum(v)
-
-    time.sleep(0.1)
-
-    with open("/proc/stat") as f:
-        l=f.readline()
-
-    v2=list(map(int,l.split()[1:]))
-
-    idle2=v2[3]
-    total2=sum(v2)
-
-    cpu=100*(1-(idle2-idle)/(total2-total))
-
-    return round(cpu,1)
+# ---------------- RAM docker ----------------
 
 def ram():
+    try:
+        out = subprocess.check_output(
+            "docker stats amnezia-awg --no-stream --format '{{.MemUsage}}'",
+            shell=True
+        ).decode().strip()
 
-    m=open("/proc/meminfo").read()
+        return out
+    except:
+        return "-"
 
-    total=int(re.search(r"MemTotal:\s+(\d+)",m).group(1))
-    free=int(re.search(r"MemAvailable:\s+(\d+)",m).group(1))
 
-    used=total-free
-
-    total=round(total/1024/1024,1)
-    used=round(used/1024/1024,1)
-
-    return f"{used}/{total} GB"
+# ---------------- DISK ----------------
 
 def disk():
 
-    st=os.statvfs("/")
+    st = os.statvfs("/")
 
-    total=st.f_blocks*st.f_frsize
-    free=st.f_bfree*st.f_frsize
+    total = st.f_blocks * st.f_frsize
+    free = st.f_bfree * st.f_frsize
 
-    used=total-free
+    used = total - free
 
-    return f"{round(used/1024/1024/1024,1)}/{round(total/1024/1024/1024,1)} GB"
+    total = round(total/1024/1024/1024,1)
+    used = round(used/1024/1024/1024,1)
+
+    return f"{used}/{total} GB"
+
+
+# ---------------- PING ----------------
 
 def ping():
 
     try:
-        o=subprocess.check_output("ping -c 1 1.1.1.1",shell=True).decode()
-        ms=re.search("time=(.*) ms",o).group(1)
+        o = subprocess.check_output(
+            "ping -c 1 1.1.1.1",
+            shell=True
+        ).decode()
+
+        ms = re.search("time=(.*) ms",o).group(1)
+
         return ms
+
     except:
         return "-"
 
+
+# ---------------- bytes ----------------
+
+def bytes_from(v):
+
+    n = float(v.split()[0])
+    u = v.split()[1]
+
+    if u == "KiB": return n * 1024
+    if u == "MiB": return n * 1024 * 1024
+    if u == "GiB": return n * 1024 * 1024 * 1024
+
+    return n
+
+
+def human(b):
+
+    for u in ["B","KB","MB","GB","TB"]:
+        if b < 1024:
+            return f"{b:.1f} {u}"
+        b /= 1024
+
+
+# ---------------- peers ----------------
+
 def peers():
 
-    out=subprocess.check_output(
+    out = subprocess.check_output(
         "docker exec amnezia-awg wg show",
         shell=True
     ).decode()
 
-    peers=out.split("peer: ")[1:]
+    peers = out.split("peer: ")[1:]
 
-    res=[]
+    result = []
 
     for p in peers:
 
-        ip=re.search("allowed ips: (.*)",p)
-        hs=re.search("latest handshake: (.*)",p)
-        tr=re.search("transfer: (.*)",p)
+        ip = re.search("allowed ips: (.*)",p)
+        hs = re.search("latest handshake: (.*)",p)
+        tr = re.search("transfer: (.*)",p)
 
-        ip=ip.group(1)
-        hs=hs.group(1) if hs else "never"
+        ip = ip.group(1)
+        hs = hs.group(1) if hs else "never"
 
-        online=False
+        online = False
 
         if "second" in hs:
-            online=True
+            online = True
 
         if "minute" in hs:
-            n=int(hs.split()[0])
-            if n < 3:
-                online=True
+            n = int(hs.split()[0])
+            if n < 2:
+                online = True
 
         if tr:
 
-            m=re.search("transfer: (.*) received, (.*) sent",p)
+            m = re.search(
+                "transfer: (.*) received, (.*) sent",
+                p
+            )
 
-            r=m.group(1)
-            s=m.group(2)
+            r = m.group(1)
+            s = m.group(2)
 
-            rb=bytes_from(r)
-            sb=bytes_from(s)
+            rb = bytes_from(r)
+            sb = bytes_from(s)
 
-            total=rb+sb
+            total = rb + sb
 
-            tr=f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
+            tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
 
         else:
-            tr="0"
+            tr = "0"
 
-        hs=hs.replace("seconds","сек")
-        hs=hs.replace("second","сек")
-        hs=hs.replace("minutes","мин")
-        hs=hs.replace("minute","мин")
-        hs=hs.replace("hours","ч")
-        hs=hs.replace("hour","ч")
-        hs=hs.replace("ago","назад")
+        hs = hs.replace("seconds","сек")
+        hs = hs.replace("second","сек")
+        hs = hs.replace("minutes","мин")
+        hs = hs.replace("minute","мин")
+        hs = hs.replace("hours","ч")
+        hs = hs.replace("hour","ч")
+        hs = hs.replace("ago","назад")
+        hs = hs.replace("never","никогда")
 
-        res.append({
-            "ip":ip,
-            "hs":hs,
-            "online":online,
-            "tr":tr
+        result.append({
+            "ip": ip,
+            "hs": hs,
+            "online": online,
+            "tr": tr
         })
 
-    return res
+    return result
+
+
+# ---------------- API ----------------
 
 @app.get("/api")
 def api():
     return peers()
 
+
 @app.get("/stats")
 def stats():
-
     return {
-        "cpu":cpu(),
-        "ram":ram(),
-        "disk":disk()
+        "cpu": cpu(),
+        "ram": ram(),
+        "disk": disk()
     }
+
 
 @app.get("/ping")
 def p():
-    return {"ping":ping()}
+    return {"ping": ping()}
 
-@app.get("/",response_class=HTMLResponse)
+
+# ---------------- UI ----------------
+
+@app.get("/", response_class=HTMLResponse)
 def ui():
-
     return """
+
 <html>
+
 <head>
 
 <style>
@@ -200,7 +212,7 @@ background:#020617;
 border:1px solid #1e293b;
 padding:14px;
 border-radius:12px;
-min-width:140px
+min-width:150px
 }
 
 .grid{
@@ -281,7 +293,7 @@ ${p.online?'● Онлайн':'● Не активен'}
 
 <div>Активность: ${p.hs}</div>
 
-<div class="tr">${p.tr}</div>
+<div class="tr">Трафик: ${p.tr}</div>
 
 <div class="rename" id="r${p.ip}">
 <input id="i${p.ip}">
@@ -296,6 +308,7 @@ ${p.online?'● Онлайн':'● Не активен'}
 function rename(ip){
 
 editing=ip
+
 document.getElementById("r"+ip).style.display="block"
 
 }
@@ -316,7 +329,7 @@ async function stats(){
 r=await fetch("/stats")
 s=await r.json()
 
-cpu.innerText=s.cpu+" %"
+cpu.innerText=s.cpu
 ram.innerText=s.ram
 disk.innerText=s.disk
 
@@ -343,9 +356,20 @@ setInterval(()=>{load();stats()},3000)
 
 <div class="top">
 
-<div class="stat">CPU<br><span id="cpu"></span></div>
-<div class="stat">RAM<br><span id="ram"></span></div>
-<div class="stat">Disk<br><span id="disk"></span></div>
+<div class="stat">
+CPU<br>
+<span id="cpu"></span>
+</div>
+
+<div class="stat">
+RAM<br>
+<span id="ram"></span>
+</div>
+
+<div class="stat">
+Disk<br>
+<span id="disk"></span>
+</div>
 
 <div class="stat">
 Ping<br>
