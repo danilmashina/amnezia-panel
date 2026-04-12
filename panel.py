@@ -180,12 +180,19 @@ def speedtest():
 # --------- PEERS ---------
 
 def peers():
-    out = subprocess.check_output(
-        "docker exec amnezia-awg wg show",
-        shell=True
-    ).decode()
+    print("[PEERS] Starting peers() function")
+    try:
+        out = subprocess.check_output(
+            "docker exec amnezia-awg wg show",
+            shell=True
+        ).decode()
+        print(f"[PEERS] wg show output length: {len(out)}")
+    except Exception as e:
+        print(f"[PEERS] Error running wg show: {e}")
+        return []
 
     peers = out.split("peer: ")[1:]
+    print(f"[PEERS] Found {len(peers)} peers")
     result = []
 
     for p in peers:
@@ -259,7 +266,16 @@ def peers():
 
 @app.get("/api")
 def api():
-    return peers()
+    print("[API] /api called")
+    try:
+        result = peers()
+        print(f"[API] peers() returned {len(result)} peers")
+        return result
+    except Exception as e:
+        print(f"[API] Error in peers(): {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 @app.get("/stats")
 def stats():
