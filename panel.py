@@ -2,8 +2,19 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 import subprocess, re, os, time, json
 from datetime import datetime
+import sys
 
 app = FastAPI()
+
+# Логирование в файл
+LOG_FILE = "/opt/amnezia/panel.log"
+def log(msg):
+    try:
+        with open(LOG_FILE, 'a') as f:
+            f.write(f"[{datetime.now()}] {msg}\n")
+        print(msg)
+    except:
+        print(msg)
 
 TRAFFIC_FILE = "/opt/amnezia/traffic.json"
 last_peer_totals = {}
@@ -44,8 +55,19 @@ def get_traffic_data():
     
     try:
         with open(TRAFFIC_FILE, 'r') as f:
-            return json.load(f)
-    except:
+            data = json.load(f)
+            # Убедимся что все ключи есть
+            if not isinstance(data, dict):
+                return {"monthly": 0, "total": 0, "last_month": 0}
+            if 'monthly' not in data:
+                data['monthly'] = 0
+            if 'total' not in data:
+                data['total'] = 0
+            if 'last_month' not in data:
+                data['last_month'] = 0
+            return data
+    except Exception as e:
+        log(f"[TRAFFIC] get_traffic_data error: {e}")
         return {"monthly": 0, "total": 0, "last_month": 0}
 
 def save_traffic_data(data):
@@ -53,24 +75,27 @@ def save_traffic_data(data):
         os.makedirs(os.path.dirname(TRAFFIC_FILE), exist_ok=True)
         with open(TRAFFIC_FILE, 'w') as f:
             json.dump(data, f)
-        print(f"[TRAFFIC] Saved: {data}")
+        log(f"[TRAFFIC] Saved: {data}")
     except Exception as e:
-        print(f"[TRAFFIC] Save error: {e}")
+        log(f"[TRAFFIC] Save error: {e}")
 
 def update_traffic(bytes_amount):
-    data = get_traffic_data()
-    current_month = datetime.now().month
-    
-    # Если месяц изменился, сбросить месячный счетчик
-    if 'last_month' in data and data['last_month'] != current_month:
-        data['monthly'] = 0
-    
-    data['monthly'] += bytes_amount
-    data['total'] += bytes_amount
-    data['last_month'] = current_month
-    
-    print(f"[TRAFFIC] Update: +{bytes_amount} bytes, monthly={data['monthly']}, total={data['total']}")
-    save_traffic_data(data)
+    try:
+        data = get_traffic_data()
+        current_month = datetime.now().month
+        
+        # Если месяц изменился, сбросить месячный счетчик
+        if 'last_month' in data and data['last_month'] != current_month:
+            data['monthly'] = 0
+        
+        data['monthly'] = data.get('monthly', 0) + bytes_amount
+        data['total'] = data.get('total', 0) + bytes_amount
+        data['last_month'] = current_month
+        
+        log(f"[TRAFFIC] Update: +{bytes_amount} bytes, monthly={data['monthly']}, total={data['total']}")
+        save_traffic_data(data)
+    except Exception as e:
+        log(f"[TRAFFIC] update_traffic error: {e}")
 
 # --------- CPU всех контейнеров ---------
 
@@ -180,19 +205,19 @@ def speedtest():
 # --------- PEERS ---------
 
 def peers():
-    print("[PEERS] Starting peers() function")
+    log("[PEERS] Starting peers() function")
     try:
         out = subprocess.check_output(
             "docker exec amnezia-awg wg show",
             shell=True
         ).decode()
-        print(f"[PEERS] wg show output length: {len(out)}")
+        log(f"[PEERS] wg show output length: {len(out)}")
     except Exception as e:
-        print(f"[PEERS] Error running wg show: {e}")
+        log(f"[PEERS] Error running wg show: {e}")
         return []
 
     peers = out.split("peer: ")[1:]
-    print(f"[PEERS] Found {len(peers)} peers")
+    log(f"[PEERS] Found {len(peers)} peers")
     result = []
 
     for p in peers:
@@ -232,13 +257,13 @@ def peers():
                 if key not in last_peer_totals:
                     last_peer_totals[key] = total
                 diff = total - last_peer_totals[key]
-                print(f"[TRAFFIC] Peer {ip}: total={total}, prev={last_peer_totals[key]}, diff={diff}")
+                log(f"[TRAFFIC] Peer {ip}: total={total}, prev={last_peer_totals[key]}, diff={diff}")
                 if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
-                    print(f"[TRAFFIC] Calling update_traffic with {diff} bytes")
+                    log(f"[TRAFFIC] Calling update_traffic with {diff} bytes")
                     update_traffic(diff)
                 last_peer_totals[key] = total
             except Exception as e:
-                print(f"[TRAFFIC] Error: {e}")
+                log(f"[TRAFFIC] Error: {e}")
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
         else:
@@ -266,13 +291,13 @@ def peers():
 
 @app.get("/api")
 def api():
-    print("[API] /api called")
+    log("[API] /api called")
     try:
         result = peers()
-        print(f"[API] peers() returned {len(result)} peers")
+        log(f"[API] peers() returned {len(result)} peers")
         return result
     except Exception as e:
-        print(f"[API] Error in peers(): {e}")
+        log(f"[API] Error in peers(): {e}")
         import traceback
         traceback.print_exc()
         return []
