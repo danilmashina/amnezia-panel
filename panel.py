@@ -242,6 +242,7 @@ def peers():
     peers = out.split("peer: ")[1:]
     log(f"[PEERS] Found {len(peers)} peers")
     result = []
+    total_new_traffic = 0
 
     for p in peers:
         ip = re.search("allowed ips: (.*)", p)
@@ -272,24 +273,34 @@ def peers():
             rb = bytes_from(r)
             sb = bytes_from(s)
 
-            total = rb + sb
+            current_total = rb + sb
             
             # save traffic safely
             try:
                 key = ip
-                if key not in last_peer_totals:
-                    last_peer_totals[key] = total
-                diff = total - last_peer_totals[key]
-                log(f"[TRAFFIC] Peer {ip}: total={total}, prev={last_peer_totals[key]}, diff={diff}")
+                prev_total = last_peer_totals.get(key, 0)
+                
+                # Если текущий трафик меньше предыдущего - значит счётчик сбросился (перезагрузка)
+                # В этом случае добавляем текущий трафик как новый
+                if current_total < prev_total:
+                    log(f"[TRAFFIC] Peer {ip}: Counter reset detected (prev={prev_total}, current={current_total})")
+                    diff = current_total  # Считаем весь текущий трафик как новый
+                else:
+                    diff = current_total - prev_total
+                
+                log(f"[TRAFFIC] Peer {ip}: current={current_total}, prev={prev_total}, diff={diff}")
+                
                 if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
-                    log(f"[TRAFFIC] Calling update_traffic with {diff} bytes")
+                    log(f"[TRAFFIC] Adding {diff} bytes to total")
                     update_traffic(diff)
-                last_peer_totals[key] = total
-                save_peers_state()  # Сохраняем состояние после обновления
+                    total_new_traffic += diff
+                
+                last_peer_totals[key] = current_total
+                save_peers_state()
             except Exception as e:
                 log(f"[TRAFFIC] Error: {e}")
 
-            tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
+            tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(current_total)}"
         else:
             tr = "0"
 
@@ -308,6 +319,9 @@ def peers():
             "online": online,
             "tr": tr
         })
+
+    if total_new_traffic > 0:
+        log(f"[TRAFFIC] Total new traffic this cycle: {human(total_new_traffic)}")
 
     return result
 
