@@ -53,8 +53,9 @@ def save_traffic_data(data):
         os.makedirs(os.path.dirname(TRAFFIC_FILE), exist_ok=True)
         with open(TRAFFIC_FILE, 'w') as f:
             json.dump(data, f)
-    except:
-        pass
+        print(f"[TRAFFIC] Saved: {data}")
+    except Exception as e:
+        print(f"[TRAFFIC] Save error: {e}")
 
 def update_traffic(bytes_amount):
     data = get_traffic_data()
@@ -68,6 +69,7 @@ def update_traffic(bytes_amount):
     data['total'] += bytes_amount
     data['last_month'] = current_month
     
+    print(f"[TRAFFIC] Update: +{bytes_amount} bytes, monthly={data['monthly']}, total={data['total']}")
     save_traffic_data(data)
 
 # --------- CPU всех контейнеров ---------
@@ -223,11 +225,13 @@ def peers():
                 if key not in last_peer_totals:
                     last_peer_totals[key] = total
                 diff = total - last_peer_totals[key]
+                print(f"[TRAFFIC] Peer {ip}: total={total}, prev={last_peer_totals[key]}, diff={diff}")
                 if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
+                    print(f"[TRAFFIC] Calling update_traffic with {diff} bytes")
                     update_traffic(diff)
                 last_peer_totals[key] = total
-            except:
-                pass
+            except Exception as e:
+                print(f"[TRAFFIC] Error: {e}")
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(total)}"
         else:
@@ -707,6 +711,7 @@ def ui():
     <div class="container">
         <div class="header">
             <h1>🛡️ Amnezia Panel</h1>
+            
         </div>
 
         <div class="stats-grid">
