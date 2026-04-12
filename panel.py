@@ -250,40 +250,101 @@ def speedtest():
 # --------- PEERS ---------
 
 def peers():
+    log("[PEERS] Starting peers() function")
     try:
-        out = subprocess.check_output("docker exec amnezia-awg awg show all dump", shell=True).decode().strip()
+        out = subprocess.check_output(
+            "docker exec amnezia-awg wg show",
+            shell=True
+        ).decode()
+        log(f"[PEERS] wg show output length: {len(out)}")
     except Exception as e:
-        log(f"[PEERS] Error: {e}")
+        log(f"[PEERS] Error running wg show: {e}")
         return []
 
-    lines = out.split('\n')
-    result, total_delta = [], 0
-    now = int(time.time())
+    peers_list = out.split("peer: ")[1:]
+    log(f"[PEERS] Found {len(peers_list)} peers")
+    result = []
+    total_new_traffic = 0
 
-    for line in lines:
-        parts = line.split('\t')
-        if len(parts) < 8: continue
-        
-        pk, hs, rx, tx = parts[1], int(parts[4]), int(parts[5]), int(parts[6])
-        current_total = rx + tx
-        prev_total = last_peer_totals.get(pk, 0)
-        
-        # Считаем только новые байты
-        diff = current_total if current_total < prev_total else current_total - prev_total
-        if 0 < diff < 5 * 1024**3: # Защита от выбросов
-            total_delta += diff
-            last_peer_totals[pk] = current_total
+    for p in peers_list:
+        ip = re.search("allowed ips: (.*)", p)
+        hs = re.search("latest handshake: (.*)", p)
+
+        ip = ip.group(1)
+        hs = hs.group(1) if hs else "never"
+
+        online = False
+
+        if "second" in hs:
+            online = True
+
+        if "minute" in hs:
+            n = int(hs.split()[0])
+            if n < 2:
+                online = True
+
+        m = re.search(
+            "transfer: (.*) received, (.*) sent",
+            p
+        )
+
+        if m:
+            r = m.group(1)
+            s = m.group(2)
+
+            rb = bytes_from(r)
+            sb = bytes_from(s)
+
+            current_total = rb + sb
+            
+            # save traffic safely
+            try:
+                key = ip
+                prev_total = last_peer_totals.get(key, 0)
+                
+                # Если текущий трафик меньше предыдущего - значит счётчик сбросился (перезагрузка)
+                # В этом случае добавляем текущий трафик как новый
+                if current_total < prev_total:
+                    log(f"[TRAFFIC] Peer {ip}: Counter reset detected (prev={prev_total}, current={current_total})")
+                    diff = current_total  # Считаем весь текущий трафик как новый
+                else:
+                    diff = current_total - prev_total
+                
+                log(f"[TRAFFIC] Peer {ip}: current={current_total}, prev={prev_total}, diff={diff}")
+                
+                if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
+                    log(f"[TRAFFIC] Adding {diff} bytes to total")
+                    update_total_traffic(current_total)
+                    total_new_traffic += diff
+                
+                last_peer_totals[key] = current_total
+                save_peers_state()
+            except Exception as e:
+                log(f"[TRAFFIC] Error: {e}")
+
+            tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(current_total)}"
+        else:
+            tr = "0"
+
+        hs = hs.replace("seconds","сек")
+        hs = hs.replace("second","сек")
+        hs = hs.replace("minutes","мин")
+        hs = hs.replace("minute","мин")
+        hs = hs.replace("hours","ч")
+        hs = hs.replace("hour","ч")
+        hs = hs.replace("ago","назад")
+        hs = hs.replace("never","никогда")
 
         result.append({
-            "ip": parts[3], # Используем IP для ключа localStorage
-            "hs": datetime.fromtimestamp(hs).strftime('%H:%M:%S') if hs > 0 else "никогда",
-            "online": (now - hs) < 180 if hs > 0 else False,
-            "tr": f"{round(rx/1024**2,1)} MB ↓ {round(tx/1024**2,1)} MB ↑ | Σ {human(current_total)}"
+            "ip": ip,
+            "hs": hs,
+            "online": online,
+            "tr": tr
         })
 
-    if total_delta > 0:
-        update_traffic_data(total_delta) # Название функции совпадает
-        save_peers_state()
+    if total_new_traffic > 0:
+        log(f"[TRAFFIC] Total new traffic this cycle: {human(total_new_traffic)}")
+
     return result
 
 # --------- API ---------
