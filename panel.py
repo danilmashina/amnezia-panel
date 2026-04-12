@@ -73,52 +73,74 @@ def bytes_from(v):
 # --------- Traffic File Management ---------
 
 def get_traffic_data():
-    if not os.path.exists(TRAFFIC_FILE):
-        return {"monthly": 0, "total": 0, "last_month": 0}
+    defaults = {
+        "all_time": 420.0 * 1024 * 1024 * 1024,  # 420 GB
+        "monthly": 0.0,
+        "last_runtime_val": 0,
+        "current_month": datetime.now().month
+    }
     
     try:
-        with open(TRAFFIC_FILE, 'r') as f:
-            data = json.load(f)
-            # Убедимся что все ключи есть
-            if not isinstance(data, dict):
-                return {"monthly": 0, "total": 0, "last_month": 0}
-            if 'monthly' not in data:
-                data['monthly'] = 0
-            if 'total' not in data:
-                data['total'] = 0
-            if 'last_month' not in data:
-                data['last_month'] = 0
-            return data
+        if os.path.exists(TRAFFIC_FILE):
+            with open(TRAFFIC_FILE, 'r') as f:
+                data = json.load(f)
+                # Убедимся что все ключи есть
+                if not isinstance(data, dict):
+                    return defaults
+                if 'all_time' not in data:
+                    data['all_time'] = defaults['all_time']
+                if 'monthly' not in data:
+                    data['monthly'] = 0.0
+                if 'last_runtime_val' not in data:
+                    data['last_runtime_val'] = 0
+                if 'current_month' not in data:
+                    data['current_month'] = datetime.now().month
+                return data
+        else:
+            return defaults
     except Exception as e:
         log(f"[TRAFFIC] get_traffic_data error: {e}")
-        return {"monthly": 0, "total": 0, "last_month": 0}
+        return defaults
 
 def save_traffic_data(data):
     try:
         os.makedirs(os.path.dirname(TRAFFIC_FILE), exist_ok=True)
         with open(TRAFFIC_FILE, 'w') as f:
             json.dump(data, f)
-        log(f"[TRAFFIC] Saved: {data}")
+        log(f"[TRAFFIC] Saved: all_time={data.get('all_time', 0)/(1024**3):.2f}GB, monthly={data.get('monthly', 0)/(1024**3):.2f}GB")
     except Exception as e:
         log(f"[TRAFFIC] Save error: {e}")
 
-def update_traffic(bytes_amount):
+def update_total_traffic(current_runtime_total_bytes):
     try:
         data = get_traffic_data()
-        current_month = datetime.now().month
         
-        # Если месяц изменился, сбросить месячный счетчик
-        if 'last_month' in data and data['last_month'] != current_month:
-            data['monthly'] = 0
+        # Проверяем, не сменился ли месяц (сброс месячного счетчика)
+        now_month = datetime.now().month
+        if data.get("current_month") != now_month:
+            data["monthly"] = 0.0
+            data["current_month"] = now_month
         
-        data['monthly'] = data.get('monthly', 0) + bytes_amount
-        data['total'] = data.get('total', 0) + bytes_amount
-        data['last_month'] = current_month
+        # Вычисляем дельту (прирост трафика)
+        last_val = data.get("last_runtime_val", 0)
+        if current_runtime_total_bytes < last_val:
+            # Случился рестарт! Дельта — это всё текущее значение
+            delta = current_runtime_total_bytes
+            log(f"[TRAFFIC] Restart detected: delta={delta/(1024**3):.2f}GB")
+        else:
+            delta = current_runtime_total_bytes - last_val
         
-        log(f"[TRAFFIC] Update: +{bytes_amount} bytes, monthly={data['monthly']}, total={data['total']}")
+        # Обновляем суммы
+        data["all_time"] += delta
+        data["monthly"] += delta
+        data["last_runtime_val"] = current_runtime_total_bytes
+        
+        # Сохраняем в файл
         save_traffic_data(data)
+        return data
     except Exception as e:
-        log(f"[TRAFFIC] update_traffic error: {e}")
+        log(f"[TRAFFIC] update_total_traffic error: {e}")
+        return get_traffic_data()
 
 # --------- CPU всех контейнеров ---------
 
@@ -292,7 +314,7 @@ def peers():
                 
                 if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
                     log(f"[TRAFFIC] Adding {diff} bytes to total")
-                    update_traffic(diff)
+                    update_total_traffic(current_total)
                     total_new_traffic += diff
                 
                 last_peer_totals[key] = current_total
@@ -975,7 +997,7 @@ def ui():
                 const t = await r.json();
 
                 const monthlyGB = (t.monthly / (1024 * 1024 * 1024)).toFixed(2);
-                const totalGB = (t.total / (1024 * 1024 * 1024)).toFixed(2);
+                const totalGB = (t.all_time / (1024 * 1024 * 1024)).toFixed(2);
 
                 document.getElementById("traffic-monthly").innerText = monthlyGB + " GB";
                 document.getElementById("traffic-total").innerText = totalGB + " GB";
