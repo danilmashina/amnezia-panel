@@ -17,7 +17,30 @@ def log(msg):
         print(msg)
 
 TRAFFIC_FILE = "/opt/amnezia/traffic.json"
+PEERS_STATE_FILE = "/opt/amnezia/peers_state.json"
 last_peer_totals = {}
+
+def load_peers_state():
+    global last_peer_totals
+    try:
+        if os.path.exists(PEERS_STATE_FILE):
+            with open(PEERS_STATE_FILE, 'r') as f:
+                last_peer_totals = json.load(f)
+                log(f"[PEERS] Loaded state: {len(last_peer_totals)} peers")
+    except Exception as e:
+        log(f"[PEERS] Error loading state: {e}")
+        last_peer_totals = {}
+
+def save_peers_state():
+    try:
+        os.makedirs(os.path.dirname(PEERS_STATE_FILE), exist_ok=True)
+        with open(PEERS_STATE_FILE, 'w') as f:
+            json.dump(last_peer_totals, f)
+    except Exception as e:
+        log(f"[PEERS] Error saving state: {e}")
+
+# Загружаем состояние при старте
+load_peers_state()
 
 # ---------------- helpers ----------------
 
@@ -262,6 +285,7 @@ def peers():
                     log(f"[TRAFFIC] Calling update_traffic with {diff} bytes")
                     update_traffic(diff)
                 last_peer_totals[key] = total
+                save_peers_state()  # Сохраняем состояние после обновления
             except Exception as e:
                 log(f"[TRAFFIC] Error: {e}")
 
