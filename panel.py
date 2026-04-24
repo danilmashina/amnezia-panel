@@ -1,198 +1,237 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import subprocess, re, os, time, json
 from datetime import datetime
-import sys
 
 app = FastAPI()
 
 # Логирование в файл
 LOG_FILE = "/opt/amnezia/panel.log"
-def log(msg):
-    try:
-        with open(LOG_FILE, 'a') as f:
-            f.write(f"[{datetime.now()}] {msg}\n")
-        print(msg)
-    except:
-        print(msg)
-
 TRAFFIC_FILE = "/opt/amnezia/traffic.json"
 PEERS_STATE_FILE = "/opt/amnezia/peers_state.json"
-last_peer_totals = {}
+
+# Формат:
+# {
+#   "<ip/cidr>": {
+#       "total": <bytes>,
+#       "paused": <bool>
+#   }
+# }
+peer_state = {}
+
+
+def log(msg):
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now()}] {msg}\n")
+        print(msg)
+    except Exception:
+        print(msg)
+
 
 def load_peers_state():
-    global last_peer_totals
+    global peer_state
     try:
         if os.path.exists(PEERS_STATE_FILE):
-            with open(PEERS_STATE_FILE, 'r') as f:
-                last_peer_totals = json.load(f)
-                log(f"[PEERS] Loaded state: {len(last_peer_totals)} peers")
+            with open(PEERS_STATE_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                normalized = {}
+                for k, v in raw.items():
+                    if isinstance(v, dict):
+                        normalized[k] = {
+                            "total": float(v.get("total", 0)),
+                            "paused": bool(v.get("paused", False)),
+                        }
+                    else:
+                        normalized[k] = {"total": float(v or 0), "paused": False}
+                peer_state = normalized
+            else:
+                peer_state = {}
+            log(f"[PEERS] Loaded state: {len(peer_state)} peers")
     except Exception as e:
         log(f"[PEERS] Error loading state: {e}")
-        last_peer_totals = {}
+        peer_state = {}
+
 
 def save_peers_state():
     try:
         os.makedirs(os.path.dirname(PEERS_STATE_FILE), exist_ok=True)
-        with open(PEERS_STATE_FILE, 'w') as f:
-            json.dump(last_peer_totals, f)
+        with open(PEERS_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(peer_state, f)
     except Exception as e:
         log(f"[PEERS] Error saving state: {e}")
 
-# Загружаем состояние при старте
+
+def ensure_state(ip_cidr):
+    if ip_cidr not in peer_state or not isinstance(peer_state[ip_cidr], dict):
+        peer_state[ip_cidr] = {"total": 0.0, "paused": False}
+    return peer_state[ip_cidr]
+
+
 load_peers_state()
 
 # ---------------- helpers ----------------
 
-def parse_mem(v):
-    m = re.match(r"([0-9.]+)([A-Za-z]+)", v.strip())
+def human(b):
+    for u in ["B", "KB", "MB", "GB", "TB"]:
+        if b < 1024:
+            return f"{b:.1f} {u}"
+        b /= 1024
+    return f"{b:.1f} PB"
+
+
+def bytes_from(v):
+    m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", (v or "").strip())
     if not m:
         return 0
     n = float(m.group(1))
     u = m.group(2)
-    if u == "KiB": return n * 1024
-    if u == "MiB": return n * 1024 * 1024
-    if u == "GiB": return n * 1024 * 1024 * 1024
+    if u == "B":
+        return n
+    if u == "KiB":
+        return n * 1024
+    if u == "MiB":
+        return n * 1024 * 1024
+    if u == "GiB":
+        return n * 1024 * 1024 * 1024
+    if u == "TiB":
+        return n * 1024 * 1024 * 1024 * 1024
     return n
 
-def human(b):
-    for u in ["B","KB","MB","GB","TB"]:
-        if b < 1024:
-            return f"{b:.1f} {u}"
-        b /= 1024
-
-def bytes_from(v):
-    m = re.match(r"([0-9.]+)\s*([A-Za-z]+)", v)
-    n = float(m.group(1))
-    u = m.group(2)
-    if u == "KiB": return n * 1024
-    if u == "MiB": return n * 1024 * 1024
-    if u == "GiB": return n * 1024 * 1024 * 1024
-    return n
 
 # --------- Traffic File Management ---------
 
 def get_traffic_data():
     defaults = {
-        "all_time": 420.0 * 1024 * 1024 * 1024,  # 420 GB
+        "all_time": 420.0 * 1024 * 1024 * 1024,
         "monthly": 0.0,
         "last_runtime_val": 0,
-        "current_month": datetime.now().month
+        "current_month": datetime.now().month,
     }
-    
+
     try:
         if os.path.exists(TRAFFIC_FILE):
-            with open(TRAFFIC_FILE, 'r') as f:
+            with open(TRAFFIC_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Убедимся что все ключи есть
-                if not isinstance(data, dict):
-                    return defaults
-                if 'all_time' not in data:
-                    data['all_time'] = defaults['all_time']
-                if 'monthly' not in data:
-                    data['monthly'] = 0.0
-                if 'last_runtime_val' not in data:
-                    data['last_runtime_val'] = 0
-                if 'current_month' not in data:
-                    data['current_month'] = datetime.now().month
-                return data
-        else:
-            return defaults
+            if not isinstance(data, dict):
+                return defaults
+            data.setdefault("all_time", defaults["all_time"])
+            data.setdefault("monthly", defaults["monthly"])
+            data.setdefault("last_runtime_val", defaults["last_runtime_val"])
+            data.setdefault("current_month", defaults["current_month"])
+            return data
+        return defaults
     except Exception as e:
         log(f"[TRAFFIC] get_traffic_data error: {e}")
         return defaults
 
+
 def save_traffic_data(data):
     try:
         os.makedirs(os.path.dirname(TRAFFIC_FILE), exist_ok=True)
-        with open(TRAFFIC_FILE, 'w') as f:
+        with open(TRAFFIC_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f)
-        log(f"[TRAFFIC] Saved: all_time={data.get('all_time', 0)/(1024**3):.2f}GB, monthly={data.get('monthly', 0)/(1024**3):.2f}GB")
     except Exception as e:
         log(f"[TRAFFIC] Save error: {e}")
 
-def update_total_traffic(current_runtime_total_bytes):
+
+def update_total_traffic(delta):
     try:
         data = get_traffic_data()
-        
-        # Проверяем, не сменился ли месяц (сброс месячного счетчика)
         now_month = datetime.now().month
         if data.get("current_month") != now_month:
             data["monthly"] = 0.0
             data["current_month"] = now_month
-        
-        # Вычисляем дельту (прирост трафика)
-        last_val = data.get("last_runtime_val", 0)
-        if current_runtime_total_bytes < last_val:
-            # Случился рестарт! Дельта — это всё текущее значение
-            delta = current_runtime_total_bytes
-            log(f"[TRAFFIC] Restart detected: delta={delta/(1024**3):.2f}GB")
-        else:
-            delta = current_runtime_total_bytes - last_val
-        
-        # Обновляем суммы
+
         data["all_time"] += delta
         data["monthly"] += delta
-        data["last_runtime_val"] = current_runtime_total_bytes
-        
-        # Сохраняем в файл
         save_traffic_data(data)
         return data
     except Exception as e:
         log(f"[TRAFFIC] update_total_traffic error: {e}")
         return get_traffic_data()
 
-# --------- CPU всех контейнеров ---------
+
+# --------- Peer Pause/Resume ---------
+
+def set_peer_pause(ip_cidr, pause):
+    ip = (ip_cidr or "").split("/")[0].strip()
+    if not ip:
+        return False, "bad ip"
+
+    rules = [
+        f"-s {ip} -j DROP",
+        f"-d {ip} -j DROP",
+    ]
+
+    try:
+        for r in rules:
+            check = subprocess.run(
+                f"docker exec amnezia-awg iptables -C FORWARD {r}",
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            exists = check.returncode == 0
+
+            if pause and not exists:
+                subprocess.check_call(
+                    f"docker exec amnezia-awg iptables -I FORWARD {r}",
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            if (not pause) and exists:
+                subprocess.check_call(
+                    f"docker exec amnezia-awg iptables -D FORWARD {r}",
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+        return True, "ok"
+    except Exception as e:
+        return False, str(e)
+
+
+# --------- CPU ---------
 
 def cpu():
     try:
-        # Суммируем CPU всех контейнеров
         out = subprocess.check_output(
             "docker stats --no-stream --format '{{.CPUPerc}}' $(docker ps -q)",
-            shell=True
+            shell=True,
         ).decode().strip()
-        
+
         total_cpu = 0
-        for line in out.split('\n'):
-            if line and '%' in line:
-                val = float(line.replace('%', '').strip())
-                total_cpu += val
-        
+        for line in out.split("\n"):
+            if line and "%" in line:
+                total_cpu += float(line.replace("%", "").strip())
+
         return f"{total_cpu:.2f}%"
-    except:
+    except Exception:
         return "-"
 
-# --------- RAM всех контейнеров ---------
+
+# --------- RAM ---------
 
 def ram():
     try:
-        # Суммируем RAM всех контейнеров
         out = subprocess.check_output(
             "docker stats --no-stream --format '{{.MemUsage}}' $(docker ps -q)",
-            shell=True
+            shell=True,
         ).decode().strip()
-        
+
         total_used = 0
-        
-        for line in out.split('\n'):
-            if line and '/' in line:
-                parts = line.split('/')
-                if len(parts) == 2:
-                    used_str = parts[0].strip()
-                    
-                    # Парсим только used (левую часть)
-                    m = re.match(r"([\d.]+)([A-Za-z]+)", used_str)
-                    if m:
-                        val = float(m.group(1))
-                        unit = m.group(2)
-                        if unit == "KiB": total_used += val * 1024
-                        elif unit == "MiB": total_used += val * 1024 * 1024
-                        elif unit == "GiB": total_used += val * 1024 * 1024 * 1024
-        
-        # Показываем только используемую память (лимит 2GB)
+        for line in out.split("\n"):
+            if line and "/" in line:
+                used_str = line.split("/")[0].strip()
+                total_used += bytes_from(used_str)
+
         return f"{human(total_used)}/2.0 GB"
-    except:
+    except Exception:
         return "-"
+
 
 # --------- DISK ---------
 
@@ -201,186 +240,193 @@ def disk():
     total = st.f_blocks * st.f_frsize
     free = st.f_bfree * st.f_frsize
     used = total - free
-    total = round(total/1024/1024/1024,1)
-    used = round(used/1024/1024/1024,1)
+    total = round(total / 1024 / 1024 / 1024, 1)
+    used = round(used / 1024 / 1024 / 1024, 1)
     return f"{used}/{total} GB"
 
-# --------- PING через VPN ---------
+
+# --------- PING ---------
 
 def ping_vpn():
     try:
-        # Пингуем реальный IP сервера, а не localhost
         o = subprocess.check_output(
             "ping -c 1 8.8.8.8",
             shell=True,
-            timeout=5
+            timeout=5,
         ).decode()
-        # Ищем time=XX.X ms в выводе
         ms = re.search(r"time=([\d.]+)\s*ms", o)
-        if ms:
-            return ms.group(1)
+        return ms.group(1) if ms else "-"
+    except Exception:
         return "-"
-    except:
-        return "-"
+
 
 # --------- SPEEDTEST ---------
 
 def speedtest():
     try:
-        # Используем speedtest с JSON форматом
         result = subprocess.check_output(
             "speedtest -f json",
             shell=True,
             timeout=300,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
         ).decode().strip()
-        
-        # Парсим JSON
+
         data = json.loads(result)
-        
-        # Извлекаем download и upload в Mbps
-        download = data.get('download', {}).get('bandwidth', 0) * 8 / 1000000  # Convert to Mbps
-        upload = data.get('upload', {}).get('bandwidth', 0) * 8 / 1000000  # Convert to Mbps
-        
+        download = data.get("download", {}).get("bandwidth", 0) * 8 / 1000000
+        upload = data.get("upload", {}).get("bandwidth", 0) * 8 / 1000000
+
         return {"download": f"{download:.1f} Mbps", "upload": f"{upload:.1f} Mbps"}
-    except Exception as e:
-        print(f"Speedtest error: {e}")
+    except Exception:
         return {"download": "-", "upload": "-"}
+
 
 # --------- PEERS ---------
 
 def peers():
-    log("[PEERS] Starting peers() function")
     try:
         out = subprocess.check_output(
             "docker exec amnezia-awg wg show",
-            shell=True
+            shell=True,
         ).decode()
-        log(f"[PEERS] wg show output length: {len(out)}")
     except Exception as e:
         log(f"[PEERS] Error running wg show: {e}")
         return []
 
-    peers_list = out.split("peer: ")[1:]
-    log(f"[PEERS] Found {len(peers_list)} peers")
+    blocks = out.split("peer: ")[1:]
     result = []
     total_new_traffic = 0
+    changed = False
 
-    for p in peers_list:
-        ip = re.search("allowed ips: (.*)", p)
-        hs = re.search("latest handshake: (.*)", p)
+    for p in blocks:
+        ip_m = re.search("allowed ips: (.*)", p)
+        hs_m = re.search("latest handshake: (.*)", p)
+        tr_m = re.search("transfer: (.*) received, (.*) sent", p)
+        if not ip_m:
+            continue
 
-        ip = ip.group(1)
-        hs = hs.group(1) if hs else "never"
+        ip = ip_m.group(1).strip()
+        hs = hs_m.group(1) if hs_m else "never"
 
         online = False
-
         if "second" in hs:
             online = True
-
         if "minute" in hs:
-            n = int(hs.split()[0])
-            if n < 2:
-                online = True
+            try:
+                if int(hs.split()[0]) < 2:
+                    online = True
+            except Exception:
+                pass
 
-        m = re.search(
-            "transfer: (.*) received, (.*) sent",
-            p
-        )
+        state = ensure_state(ip)
+        paused = bool(state.get("paused", False))
+        if paused:
+            online = False
 
-        if m:
-            r = m.group(1)
-            s = m.group(2)
-
+        if tr_m:
+            r = tr_m.group(1)
+            s = tr_m.group(2)
             rb = bytes_from(r)
             sb = bytes_from(s)
-
             current_total = rb + sb
-            
-            # save traffic safely
-            try:
-                key = ip
-                prev_total = last_peer_totals.get(key, 0)
-                
-                # Если текущий трафик меньше предыдущего - значит счётчик сбросился (перезагрузка)
-                # В этом случае добавляем текущий трафик как новый
-                if current_total < prev_total:
-                    log(f"[TRAFFIC] Peer {ip}: Counter reset detected (prev={prev_total}, current={current_total})")
-                    diff = current_total  # Считаем весь текущий трафик как новый
-                else:
-                    diff = current_total - prev_total
-                
-                log(f"[TRAFFIC] Peer {ip}: current={current_total}, prev={prev_total}, diff={diff}")
-                
-                if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
-                    log(f"[TRAFFIC] Adding {diff} bytes to total")
-                    update_total_traffic(current_total)
-                    total_new_traffic += diff
-                
-                last_peer_totals[key] = current_total
-                save_peers_state()
-            except Exception as e:
-                log(f"[TRAFFIC] Error: {e}")
+
+            prev_total = float(state.get("total", 0))
+            if current_total < prev_total:
+                diff = current_total
+            else:
+                diff = current_total - prev_total
+
+            if diff > 0 and diff < 50 * 1024 * 1024 * 1024:
+                total_new_traffic += diff
+
+            if abs(current_total - prev_total) > 0:
+                state["total"] = current_total
+                changed = True
 
             tr = f"{human(rb)} ↓ {human(sb)} ↑ | Σ {human(current_total)}"
         else:
             tr = "0"
 
-        hs = hs.replace("seconds","сек")
-        hs = hs.replace("second","сек")
-        hs = hs.replace("minutes","мин")
-        hs = hs.replace("minute","мин")
-        hs = hs.replace("hours","ч")
-        hs = hs.replace("hour","ч")
-        hs = hs.replace("ago","назад")
-        hs = hs.replace("never","никогда")
+        hs_ru = hs
+        hs_ru = hs_ru.replace("seconds", "сек")
+        hs_ru = hs_ru.replace("second", "сек")
+        hs_ru = hs_ru.replace("minutes", "мин")
+        hs_ru = hs_ru.replace("minute", "мин")
+        hs_ru = hs_ru.replace("hours", "ч")
+        hs_ru = hs_ru.replace("hour", "ч")
+        hs_ru = hs_ru.replace("ago", "назад")
+        hs_ru = hs_ru.replace("never", "никогда")
 
         result.append({
             "ip": ip,
-            "hs": hs,
+            "hs": hs_ru,
             "online": online,
-            "tr": tr
+            "paused": paused,
+            "tr": tr,
         })
 
     if total_new_traffic > 0:
-        log(f"[TRAFFIC] Total new traffic this cycle: {human(total_new_traffic)}")
+        update_total_traffic(total_new_traffic)
+
+    if changed:
+        save_peers_state()
 
     return result
+
 
 # --------- API ---------
 
 @app.get("/api")
 def api():
-    log("[API] /api called")
-    try:
-        result = peers()
-        log(f"[API] peers() returned {len(result)} peers")
-        return result
-    except Exception as e:
-        log(f"[API] Error in peers(): {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+    return peers()
+
+
+@app.post("/api/peer/{peer_ip:path}/pause")
+def pause_peer(peer_ip: str):
+    ok, err = set_peer_pause(peer_ip, True)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err}, status_code=500)
+
+    st = ensure_state(peer_ip)
+    st["paused"] = True
+    save_peers_state()
+    return {"ok": True, "ip": peer_ip, "paused": True}
+
+
+@app.post("/api/peer/{peer_ip:path}/resume")
+def resume_peer(peer_ip: str):
+    ok, err = set_peer_pause(peer_ip, False)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err}, status_code=500)
+
+    st = ensure_state(peer_ip)
+    st["paused"] = False
+    save_peers_state()
+    return {"ok": True, "ip": peer_ip, "paused": False}
+
 
 @app.get("/stats")
 def stats():
     return {
         "cpu": cpu(),
         "ram": ram(),
-        "disk": disk()
+        "disk": disk(),
     }
+
 
 @app.get("/ping")
 def p():
     return {"ping": ping_vpn()}
 
+
 @app.get("/speedtest")
 def speed():
     return speedtest()
 
+
 @app.get("/traffic")
 def traffic():
     return get_traffic_data()
+
 
 # --------- UI ---------
 
@@ -445,12 +491,6 @@ def ui():
             background-clip: text;
             margin-bottom: 10px;
             letter-spacing: -1px;
-        }
-
-        .header p {
-            color: #94a3b8;
-            font-size: 16px;
-            font-weight: 300;
         }
 
         .stats-grid {
@@ -556,8 +596,15 @@ def ui():
             font-family: 'Inter', sans-serif;
         }
 
+        .action-btn.pause {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+        }
+
+        .action-btn.resume {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+        }
+
         .action-btn:hover:not(:disabled) {
-            background: linear-gradient(135deg, #2563eb, #1d4ed8);
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
         }
@@ -567,17 +614,8 @@ def ui():
             cursor: not-allowed;
         }
 
-        .action-btn:active:not(:disabled) {
-            transform: translateY(0);
-        }
-
         .action-btn.speed {
             background: linear-gradient(135deg, #8b5cf6, #7c3aed);
-        }
-
-        .action-btn.speed:hover:not(:disabled) {
-            background: linear-gradient(135deg, #7c3aed, #6d28d9);
-            box-shadow: 0 10px 20px rgba(139, 92, 246, 0.3);
         }
 
         .section-title {
@@ -633,10 +671,6 @@ def ui():
             word-break: break-all;
         }
 
-        .peer-name:hover {
-            color: #93c5fd;
-        }
-
         .peer-status {
             display: flex;
             align-items: center;
@@ -668,13 +702,8 @@ def ui():
             50% { opacity: 0.5; }
         }
 
-        .peer-status.online {
-            color: #10b981;
-        }
-
-        .peer-status.offline {
-            color: #94a3b8;
-        }
+        .peer-status.online { color: #10b981; }
+        .peer-status.offline { color: #94a3b8; }
 
         .peer-ip {
             font-family: 'Courier New', monospace;
@@ -697,9 +726,7 @@ def ui():
             align-items: center;
         }
 
-        .peer-info-label {
-            color: #94a3b8;
-        }
+        .peer-info-label { color: #94a3b8; }
 
         .peer-traffic {
             font-size: 13px;
@@ -718,9 +745,7 @@ def ui():
             gap: 8px;
         }
 
-        .peer-rename.active {
-            display: flex;
-        }
+        .peer-rename.active { display: flex; }
 
         .peer-rename input {
             flex: 1;
@@ -730,14 +755,7 @@ def ui():
             border-radius: 8px;
             color: #e2e8f0;
             font-size: 13px;
-            transition: border-color 0.2s;
             font-family: 'Inter', sans-serif;
-        }
-
-        .peer-rename input:focus {
-            outline: none;
-            border-color: rgba(99, 102, 241, 1);
-            background: rgba(15, 23, 42, 0.9);
         }
 
         .peer-rename button {
@@ -748,14 +766,8 @@ def ui():
             color: white;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s;
             font-size: 12px;
             font-family: 'Inter', sans-serif;
-        }
-
-        .peer-rename button:hover {
-            background: linear-gradient(135deg, #4f46e5, #4338ca);
-            transform: translateY(-2px);
         }
 
         .empty-state {
@@ -779,30 +791,12 @@ def ui():
         }
 
         @media (max-width: 768px) {
-            .header h1 {
-                font-size: 36px;
-            }
-
-            .stats-grid {
-                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-                gap: 12px;
-            }
-
-            .stat-card {
-                padding: 16px;
-            }
-
-            .stat-value {
-                font-size: 18px;
-            }
-
-            .peers-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .peer-card {
-                padding: 16px;
-            }
+            .header h1 { font-size: 36px; }
+            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+            .stat-card { padding: 16px; }
+            .stat-value { font-size: 18px; }
+            .peers-grid { grid-template-columns: 1fr; }
+            .peer-card { padding: 16px; }
         }
 
     </style>
@@ -812,7 +806,6 @@ def ui():
     <div class="container">
         <div class="header">
             <h1>🛡️ Amnezia Panel</h1>
-            
         </div>
 
         <div class="stats-grid">
@@ -820,27 +813,21 @@ def ui():
                 <div class="stat-icon">📊</div>
                 <div class="stat-label">CPU</div>
                 <div class="stat-value" id="cpu">-</div>
-                <div class="stat-bar">
-                    <div class="stat-fill cpu" id="cpu-bar" style="width: 0%"></div>
-                </div>
+                <div class="stat-bar"><div class="stat-fill cpu" id="cpu-bar" style="width: 0%"></div></div>
             </div>
 
             <div class="stat-card">
                 <div class="stat-icon">💾</div>
                 <div class="stat-label">RAM</div>
                 <div class="stat-value" id="ram" style="font-size: 20px;">-</div>
-                <div class="stat-bar">
-                    <div class="stat-fill ram" id="ram-bar" style="width: 0%"></div>
-                </div>
+                <div class="stat-bar"><div class="stat-fill ram" id="ram-bar" style="width: 0%"></div></div>
             </div>
 
             <div class="stat-card">
                 <div class="stat-icon">🗄️</div>
                 <div class="stat-label">Disk</div>
                 <div class="stat-value" id="disk" style="font-size: 20px;">-</div>
-                <div class="stat-bar">
-                    <div class="stat-fill disk" id="disk-bar" style="width: 0%"></div>
-                </div>
+                <div class="stat-bar"><div class="stat-fill disk" id="disk-bar" style="width: 0%"></div></div>
             </div>
 
             <div class="stat-card">
@@ -862,14 +849,8 @@ def ui():
                 <div class="stat-label">Трафик</div>
                 <div class="stat-value" id="traffic" style="font-size: 18px;">-</div>
                 <div class="traffic-info">
-                    <div class="traffic-row">
-                        <span>За месяц:</span>
-                        <span id="traffic-monthly">0 GB</span>
-                    </div>
-                    <div class="traffic-row">
-                        <span>Всего:</span>
-                        <span id="traffic-total">0 GB</span>
-                    </div>
+                    <div class="traffic-row"><span>За месяц:</span><span id="traffic-monthly">0 GB</span></div>
+                    <div class="traffic-row"><span>Всего:</span><span id="traffic-total">0 GB</span></div>
                 </div>
             </div>
         </div>
@@ -883,13 +864,12 @@ def ui():
 
         async function load() {
             if (editing) return;
-
             try {
-                const r = await fetch("/api");
+                const r = await fetch('/api');
                 const data = await r.json();
 
                 const grid = document.getElementById('grid');
-                grid.innerHTML = "";
+                grid.innerHTML = '';
 
                 if (data.length === 0) {
                     grid.innerHTML = '<div class="empty-state"><p>📭 Нет активных пиров</p></div>';
@@ -898,15 +878,16 @@ def ui():
 
                 data.forEach(p => {
                     const name = localStorage[p.ip] || p.ip;
+                    const paused = !!p.paused;
 
                     const card = document.createElement('div');
                     card.className = 'peer-card';
                     card.innerHTML = `
                         <div class="peer-name" onclick="rename('${p.ip}')">${name}</div>
-                        
+
                         <div class="peer-status ${p.online ? 'online' : 'offline'}">
                             <div class="status-dot ${p.online ? 'online' : 'offline'}"></div>
-                            ${p.online ? '● Онлайн' : '● Не активен'}
+                            ${paused ? '● Пауза' : (p.online ? '● Онлайн' : '● Не активен')}
                         </div>
 
                         <div class="peer-ip">${p.ip}</div>
@@ -918,12 +899,15 @@ def ui():
 
                         <div class="peer-traffic">📤 ${p.tr}</div>
 
+                        <button class="action-btn ${paused ? 'resume' : 'pause'}" onclick="togglePeer('${encodeURIComponent(p.ip)}', ${paused})">
+                            ${paused ? 'Возобновить' : 'Остановить'}
+                        </button>
+
                         <div class="peer-rename" id="r${p.ip}">
                             <input id="i${p.ip}" placeholder="Введите имя пира" value="${name}">
                             <button onclick="save('${p.ip}')">OK</button>
                         </div>
                     `;
-
                     grid.appendChild(card);
                 });
             } catch (err) {
@@ -931,58 +915,68 @@ def ui():
             }
         }
 
+        async function togglePeer(ipEnc, isPaused) {
+            const endpoint = isPaused ? 'resume' : 'pause';
+            try {
+                const resp = await fetch(`/api/peer/${ipEnc}/${endpoint}`, { method: 'POST' });
+                if (!resp.ok) {
+                    const t = await resp.text();
+                    alert('Ошибка: ' + t);
+                }
+            } catch (e) {
+                alert('Ошибка сети');
+            }
+            load();
+        }
+
         function rename(ip) {
             editing = ip;
-            const renameEl = document.getElementById("r" + ip);
+            const renameEl = document.getElementById('r' + ip);
             renameEl.classList.add('active');
-            document.getElementById("i" + ip).focus();
+            document.getElementById('i' + ip).focus();
         }
 
         function save(ip) {
-            const v = document.getElementById("i" + ip).value;
-            if (v.trim()) {
-                localStorage[ip] = v;
-            }
+            const v = document.getElementById('i' + ip).value;
+            if (v.trim()) localStorage[ip] = v;
             editing = null;
             load();
         }
 
         async function stats() {
             try {
-                const r = await fetch("/stats");
+                const r = await fetch('/stats');
                 const s = await r.json();
 
-                document.getElementById("cpu").innerText = s.cpu;
-                document.getElementById("ram").innerText = s.ram;
-                document.getElementById("disk").innerText = s.disk;
+                document.getElementById('cpu').innerText = s.cpu;
+                document.getElementById('ram').innerText = s.ram;
+                document.getElementById('disk').innerText = s.disk;
 
-                if (s.cpu && s.cpu !== "-") {
+                if (s.cpu && s.cpu !== '-') {
                     const cpuVal = parseFloat(s.cpu);
-                    if (!isNaN(cpuVal)) {
-                        document.getElementById("cpu-bar").style.width = Math.min(cpuVal, 100) + "%";
-                    }
+                    if (!isNaN(cpuVal)) document.getElementById('cpu-bar').style.width = Math.min(cpuVal, 100) + '%';
                 }
 
-                if (s.ram && s.ram !== "-") {
-                    const ramParts = s.ram.split("/");
+                if (s.ram && s.ram !== '-') {
+                    const ramParts = s.ram.split('/');
                     if (ramParts.length === 2) {
                         const used = parseFloat(ramParts[0]);
                         const total = parseFloat(ramParts[1]);
                         if (!isNaN(used) && !isNaN(total) && total > 0) {
                             const ramVal = (used / total) * 100;
-                            document.getElementById("ram-bar").style.width = Math.min(ramVal, 100) + "%";
+                            document.getElementById('ram-bar').style.width = Math.min(ramVal, 100) + '%';
                         }
                     }
                 }
 
-                if (s.disk && s.disk !== "-") {
-                    const diskParts = s.disk.split("/");
+                if (s.disk && s.disk !== '-') {
+                    const diskParts = s.disk.split('/');
                     if (diskParts.length === 2) {
                         const used = parseFloat(diskParts[0]);
                         const total = parseFloat(diskParts[1]);
                         if (!isNaN(used) && !isNaN(total) && total > 0) {
                             const diskVal = (used / total) * 100;
-                            document.getElementById("disk-bar").style.width = Math.min(diskVal, 100) + "%";
+                            document.getElementById('disk-bar').style.width = Math.min(diskVal, 100) + '%';
                         }
                     }
                 }
@@ -993,14 +987,12 @@ def ui():
 
         async function updateTraffic() {
             try {
-                const r = await fetch("/traffic");
+                const r = await fetch('/traffic');
                 const t = await r.json();
-
                 const monthlyGB = (t.monthly / (1024 * 1024 * 1024)).toFixed(2);
                 const totalGB = (t.all_time / (1024 * 1024 * 1024)).toFixed(2);
-
-                document.getElementById("traffic-monthly").innerText = monthlyGB + " GB";
-                document.getElementById("traffic-total").innerText = totalGB + " GB";
+                document.getElementById('traffic-monthly').innerText = monthlyGB + ' GB';
+                document.getElementById('traffic-total').innerText = totalGB + ' GB';
             } catch (err) {
                 console.error('Traffic error:', err);
             }
@@ -1010,16 +1002,13 @@ def ui():
             const btn = document.getElementById('ping-btn');
             btn.disabled = true;
             btn.innerText = 'Проверка...';
-
             try {
-                const r = await fetch("/ping");
+                const r = await fetch('/ping');
                 const p = await r.json();
-                document.getElementById("ping").innerText = (p.ping !== "-" ? p.ping + " ms" : "-");
+                document.getElementById('ping').innerText = (p.ping !== '-' ? p.ping + ' ms' : '-');
             } catch (err) {
-                console.error('Ping error:', err);
-                document.getElementById("ping").innerText = "Ошибка";
+                document.getElementById('ping').innerText = 'Ошибка';
             }
-
             setTimeout(() => {
                 btn.disabled = false;
                 btn.innerText = 'Проверить';
@@ -1034,11 +1023,10 @@ def ui():
             speedEl.innerText = '⏳';
 
             try {
-                const r = await fetch("/speedtest");
+                const r = await fetch('/speedtest');
                 const s = await r.json();
                 speedEl.innerHTML = `<div style="font-size: 14px;">⬇️ ${s.download}<br>⬆️ ${s.upload}</div>`;
             } catch (err) {
-                console.error('Speedtest error:', err);
                 speedEl.innerText = 'Ошибка';
             }
 
